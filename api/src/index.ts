@@ -5,6 +5,8 @@ import {
   createProject,
   getProject,
   listProjects,
+  listSegmentsByProject,
+  splitText,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -47,6 +49,26 @@ app.get('/api/projects/:id', (req, res) => {
     return;
   }
   res.json(project);
+});
+
+app.get('/api/projects/:id/segments', (req, res) => {
+  const project = getProject(db, req.params.id);
+  if (!project) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  res.json(listSegmentsByProject(db, req.params.id));
+});
+
+app.post('/api/projects/:id/split', async (req, res) => {
+  try {
+    await splitText(db, req.params.id);
+    const segments = listSegmentsByProject(db, req.params.id);
+    res.json({ ok: true, segments });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
 });
 
 const port = Number(process.env.PORT ?? 3100);

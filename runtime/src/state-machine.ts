@@ -3,7 +3,7 @@ import type { ProjectStatus, SegmentStatus } from './types';
 /** 项目状态机：九阶段流水线的合法流转 */
 export const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
   planning: ['splitting', 'failed'],
-  splitting: ['asset_extracting', 'failed'],
+  splitting: ['planning', 'asset_extracting', 'failed'],
   asset_extracting: ['prompt_building', 'failed'],
   prompt_building: ['reference_generating', 'segment_generating', 'failed'],
   reference_generating: ['segment_generating', 'failed'],
