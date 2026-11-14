@@ -8,3 +8,4 @@ export * from './providers';
 export * from './asset-extractor';
 export * from './tts';
 export * from './queue';
+export * from './billing';

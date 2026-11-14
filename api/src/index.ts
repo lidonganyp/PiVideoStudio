@@ -26,6 +26,7 @@ import {
   listSegmentVersions,
   updateSegment,
   generateTTS,
+  getProjectCostSummary,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -323,6 +324,22 @@ app.get('/api/projects/:id/jobs', (req, res) => {
     return;
   }
   res.json(listJobsByProject(db, req.params.id));
+});
+
+app.get('/api/projects/:id/cost', (req, res) => {
+  const project = getProject(db, req.params.id);
+  if (!project) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  const summary = getProjectCostSummary(db, req.params.id);
+  res.json({
+    projectId: summary.projectId,
+    totalCost: summary.totalCost,
+    records: summary.records,
+    byProvider: Object.fromEntries(summary.byProvider),
+    byKind: Object.fromEntries(summary.byKind),
+  });
 });
 
 app.post('/api/projects/:id/compose', (req, res) => {
