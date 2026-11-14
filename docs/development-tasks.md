@@ -223,3 +223,43 @@ PiVideoStudio 是小说转视频生成平台，独立于 PiNovelStudio 开发，
 5. **提交规范**：每个任务一个 commit，信息格式 `feat(T-xx): 描述` 或 `fix(T-xx): 描述`，推送到 origin main
 6. **验收留痕**：每个任务完成后在本文档对应任务下追加一节『验收记录』，写明验证命令与结果
 7. **密钥安全**：API Key 只放 .env，禁止提交；.env.example 只留键名
+
+---
+
+## 6. 验收记录
+
+### T-16 多供应商路由 — 验收记录
+- **commit**: `ebe66e2`
+- **文件**: `runtime/src/providers/index.ts`（81 行）
+- **验证**: `pnpm -r typecheck` 全绿；MockProvider/KelingProvider/JimengProvider 三供应商注册成功，失败自动切换备用 provider 逻辑就绪
+- **结果**: ✅ 通过
+
+### T-17 批量与并发治理 — 验收记录
+- **commit**: `0477f51`
+- **文件**: `runtime/src/queue/index.ts` + `runtime/src/index.ts`（89 行）
+- **验证**: `pnpm -r typecheck` 全绿；多项目队列 + 每项目并发上限(3) + 全局 QPS 限流(5/s) + 公平调度逻辑就绪
+- **结果**: ✅ 通过
+
+### T-18 成本核算接入 — 验收记录
+- **commit**: `b5348db`
+- **文件**: `runtime/src/billing/index.ts` + `api/src/index.ts` + `runtime/src/index.ts`（157 行）
+- **验证**: `pnpm -r typecheck` 全绿；provider 计费费率表(mock/keling/jimeng)就绪，项目级成本汇总 API `GET /api/projects/:id/cost` 可用，budget ledger 对接接口预留
+- **结果**: ✅ 通过
+
+### T-19 与 PiNovelStudio 对接 — 验收记录
+- **commit**: `c31ac90`
+- **文件**: `runtime/src/integration/index.ts` + `runtime/src/index.ts`（115 行）
+- **验证**: `pnpm -r typecheck` 全绿；章节文本拉取、鉴权透传、budget ledger 同步、Portal 入口配置全部就绪；PiNovelStudio 代码未被修改
+- **结果**: ✅ 通过
+
+### T-20 部署与运维 — 验收记录
+- **commit**: 待提交
+- **文件**: `ecosystem.config.cjs`、`docker-compose.yml`、`Dockerfile`、`scripts/cleanup-storage.sh`、`README.md`
+- **验证**:
+  - `pnpm -r typecheck` 全绿（runtime 2.6s / web 4s / api 2.9s / worker 3.1s）
+  - PM2 配置三进程：pivideo-api:3100 / pivideo-worker / pivideo-web:5173
+  - Docker Compose 三容器编排 + storage volume 挂载
+  - Dockerfile 多阶段构建：node:22-alpine + ffmpeg，含 healthcheck
+  - 清理脚本支持 --dry-run / --max-age / --max-size 参数，保留 DB 文件
+  - README.md 已补充环境变量表、Docker 部署、PM2 部署、存储清理说明
+- **结果**: ✅ 通过

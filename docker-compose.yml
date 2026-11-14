@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pivideo-api
+    ports:
+      - '3100:3100'
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      - NODE_ENV=production
+      - PORT=3100
+      - VIDEO_PROVIDER=${VIDEO_PROVIDER:-mock}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+    restart: unless-stopped
+    depends_on:
+      - worker
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pivideo-worker
+    command: ['node_modules/.bin/tsx', 'worker/src/index.ts']
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      - NODE_ENV=production
+      - VIDEO_PROVIDER=${VIDEO_PROVIDER:-mock}
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: pivideo-web
+    ports:
+      - '5173:5173'
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    depends_on:
+      - api
