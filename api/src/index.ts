@@ -17,6 +17,8 @@ import {
   transitionSegmentStatus,
   transitionProjectStatus,
   getVideoProvider,
+  extractAssets,
+  listAssetsByProject,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -95,6 +97,26 @@ app.post('/api/projects/:id/build-prompts', async (req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
   }
+});
+
+app.post('/api/projects/:id/extract-assets', async (req, res) => {
+  try {
+    await extractAssets(db, req.params.id);
+    const assets = listAssetsByProject(db, req.params.id);
+    res.json({ ok: true, assets });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/projects/:id/assets', (req, res) => {
+  const project = getProject(db, req.params.id);
+  if (!project) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  res.json(listAssetsByProject(db, req.params.id));
 });
 
 app.post('/api/projects/:id/generate-segments', async (req, res) => {

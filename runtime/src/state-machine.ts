@@ -4,7 +4,7 @@ import type { ProjectStatus, SegmentStatus } from './types';
 export const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
   planning: ['splitting', 'failed'],
   splitting: ['planning', 'asset_extracting', 'failed'],
-  asset_extracting: ['prompt_building', 'failed'],
+  asset_extracting: ['planning', 'prompt_building', 'failed'],
   prompt_building: ['planning', 'reference_generating', 'segment_generating', 'failed'],
   reference_generating: ['segment_generating', 'failed'],
   segment_generating: ['reviewing', 'failed'],
