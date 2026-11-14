@@ -22,6 +22,9 @@ import {
   getAsset,
   updateAsset,
   getImageProvider,
+  insertSegmentVersion,
+  listSegmentVersions,
+  updateSegment,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -162,6 +165,93 @@ app.put('/api/assets/:id/select-image', (req, res) => {
   }
 });
 
+app.post('/api/segments/:id/approve', (req, res) => {
+  try {
+    const seg = getSegment(db, req.params.id);
+    if (!seg) {
+      res.status(404).json({ error: 'segment not found' });
+      return;
+    }
+    transitionSegmentStatus(db, seg.id, 'approved');
+    res.json({ ok: true, segment: getSegment(db, seg.id) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/segments/:id/reject', (req, res) => {
+  try {
+    const seg = getSegment(db, req.params.id);
+    if (!seg) {
+      res.status(404).json({ error: 'segment not found' });
+      return;
+    }
+    transitionSegmentStatus(db, seg.id, 'rejected');
+    res.json({ ok: true, segment: getSegment(db, seg.id) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/segments/:id/regenerate', async (req, res) => {
+  try {
+    const seg = getSegment(db, req.params.id);
+    if (!seg) {
+      res.status(404).json({ error: 'segment not found' });
+      return;
+    }
+    insertSegmentVersion(db, {
+      segmentId: seg.id,
+      version: seg.currentVersion,
+      prompt: seg.prompt,
+    });
+    const { prompt } = req.body ?? {};
+    if (prompt) {
+      updateSegment(db, seg.id, { prompt });
+    }
+    db.prepare('UPDATE video_segments SET current_version = current_version + 1 WHERE id = ?').run(seg.id);
+    transitionSegmentStatus(db, seg.id, 'rejected');
+    transitionSegmentStatus(db, seg.id, 'queued');
+    const project = getProject(db, seg.projectId);
+    if (project) {
+      const provider = getVideoProvider();
+      const job = createJob(db, {
+        projectId: seg.projectId,
+        segmentId: seg.id,
+        kind: 't2v',
+        provider: provider.name,
+      });
+      const submitResult = await provider.submit({
+        segmentId: seg.id,
+        prompt: prompt?.visual ?? seg.prompt?.visual ?? '',
+        negative: prompt?.negative ?? seg.prompt?.negative,
+        aspectRatio: project.aspectRatio,
+        estimatedSeconds: seg.estimatedSeconds,
+      });
+      updateJob(db, job.id, {
+        providerJobId: submitResult.providerJobId,
+        status: 'running',
+      });
+      transitionSegmentStatus(db, seg.id, 'submitted');
+    }
+    res.json({ ok: true, segment: getSegment(db, seg.id) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/segments/:id/versions', (req, res) => {
+  const seg = getSegment(db, req.params.id);
+  if (!seg) {
+    res.status(404).json({ error: 'segment not found' });
+    return;
+  }
+  res.json(listSegmentVersions(db, seg.id));
+});
+
 app.post('/api/projects/:id/generate-segments', async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -233,9 +323,9 @@ app.post('/api/projects/:id/compose', (req, res) => {
       return;
     }
     const segments = listSegmentsByProject(db, projectId);
-    const allSucceeded = segments.length > 0 && segments.every((s) => s.status === 'succeeded');
-    if (!allSucceeded) {
-      res.status(400).json({ error: '存在未成功的分镜，无法合成' });
+    const allApproved = segments.length > 0 && segments.every((s) => s.status === 'approved');
+    if (!allApproved) {
+      res.status(400).json({ error: '存在未审核通过的分镜，无法合成' });
       return;
     }
     const job = createJob(db, {
