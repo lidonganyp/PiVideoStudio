@@ -210,3 +210,84 @@ export function getImageProvider(): ImageProvider {
   console.log(`[provider-gateway] 使用图片供应商: ${cachedImageProvider.name}`);
   return cachedImageProvider;
 }
+
+// --- 多供应商路由器 ---
+
+/**
+ * 多供应商路由器：
+ * 1. 失败自动切换备用 provider
+ * 2. 按片段类型（有人物/纯场景）路由不同 provider
+ */
+export class ProviderRouter {
+  private primaryProvider: VideoProvider;
+  private fallbackProvider: VideoProvider;
+  private sceneProvider?: VideoProvider;
+
+  constructor(options: {
+    primary: VideoProvider;
+    fallback: VideoProvider;
+    scene?: VideoProvider;
+  }) {
+    this.primaryProvider = options.primary;
+    this.fallbackProvider = options.fallback;
+    this.sceneProvider = options.scene;
+  }
+
+  /**
+   * 根据片段类型选择 provider
+   * - 有人物（characterNames 非空）→ primary
+   * - 纯场景 → sceneProvider 或 primary
+   */
+  selectProvider(hasCharacters: boolean): VideoProvider {
+    if (!hasCharacters && this.sceneProvider) {
+      return this.sceneProvider;
+    }
+    return this.primaryProvider;
+  }
+
+  /**
+   * 提交任务，失败自动切换到 fallback provider
+   */
+  async submitWithFallback(
+    job: SubmitJobInput,
+    hasCharacters: boolean,
+  ): Promise<{ providerJobId: string; providerName: string }> {
+    const providers = [this.selectProvider(hasCharacters), this.fallbackProvider];
+    let lastError: Error | undefined;
+
+    for (const provider of providers) {
+      try {
+        const result = await provider.submit(job);
+        return { providerJobId: result.providerJobId, providerName: provider.name };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.warn(
+          `[provider-router] provider ${provider.name} submit failed: ${lastError.message}, trying fallback...`,
+        );
+      }
+    }
+
+    throw lastError ?? new Error('所有 provider 均提交失败');
+  }
+}
+
+let cachedRouter: ProviderRouter | undefined;
+
+/**
+ * 获取多供应商路由器实例。
+ * P2 阶段默认 primary=mock, fallback=mock（后续可配置不同 provider）。
+ */
+export function getProviderRouter(): ProviderRouter {
+  if (cachedRouter) return cachedRouter;
+
+  const primary = getVideoProvider();
+  const fallback = new MockProvider();
+
+  cachedRouter = new ProviderRouter({
+    primary,
+    fallback,
+  });
+
+  console.log('[provider-router] 初始化多供应商路由器');
+  return cachedRouter;
+}
