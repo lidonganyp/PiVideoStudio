@@ -8,6 +8,13 @@ import {
   listSegmentsByProject,
   splitText,
   buildPrompts,
+  listJobsByProject,
+  createJob,
+  updateJob,
+  getSegment,
+  transitionSegmentStatus,
+  transitionProjectStatus,
+  getVideoProvider,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -81,6 +88,68 @@ app.post('/api/projects/:id/build-prompts', async (req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
   }
+});
+
+app.post('/api/projects/:id/generate-segments', async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const project = getProject(db, projectId);
+    if (!project) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    const segments = listSegmentsByProject(db, projectId);
+    const ready = segments.filter((s) => s.status === 'prompt_ready');
+    if (ready.length === 0) {
+      res.status(400).json({ error: '没有 prompt_ready 状态的分镜可生成' });
+      return;
+    }
+    const provider = getVideoProvider();
+    const concurrency = Number(process.env.GENERATE_CONCURRENCY ?? 3);
+    transitionProjectStatus(db, projectId, 'segment_generating');
+    const jobs = [];
+    for (let i = 0; i < ready.length; i += concurrency) {
+      const batch = ready.slice(i, i + concurrency);
+      const results = await Promise.all(
+        batch.map(async (seg) => {
+          transitionSegmentStatus(db, seg.id, 'queued');
+          const job = createJob(db, {
+            projectId,
+            segmentId: seg.id,
+            kind: 't2v',
+            provider: provider.name,
+          });
+          const submitResult = await provider.submit({
+            segmentId: seg.id,
+            prompt: seg.prompt?.visual ?? '',
+            negative: seg.prompt?.negative,
+            aspectRatio: project.aspectRatio,
+            estimatedSeconds: seg.estimatedSeconds,
+          });
+          updateJob(db, job.id, {
+            providerJobId: submitResult.providerJobId,
+            status: 'running',
+          });
+          transitionSegmentStatus(db, seg.id, 'submitted');
+          return job;
+        }),
+      );
+      jobs.push(...results);
+    }
+    res.json({ ok: true, jobs });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/projects/:id/jobs', (req, res) => {
+  const project = getProject(db, req.params.id);
+  if (!project) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  res.json(listJobsByProject(db, req.params.id));
 });
 
 const port = Number(process.env.PORT ?? 3100);
