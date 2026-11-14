@@ -5,7 +5,7 @@ export const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
   planning: ['splitting', 'failed'],
   splitting: ['planning', 'asset_extracting', 'failed'],
   asset_extracting: ['prompt_building', 'failed'],
-  prompt_building: ['reference_generating', 'segment_generating', 'failed'],
+  prompt_building: ['planning', 'reference_generating', 'segment_generating', 'failed'],
   reference_generating: ['segment_generating', 'failed'],
   segment_generating: ['reviewing', 'failed'],
   reviewing: ['segment_generating', 'composing'], // 审核不通过回流重生成

@@ -7,6 +7,7 @@ import {
   listProjects,
   listSegmentsByProject,
   splitText,
+  buildPrompts,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -63,6 +64,17 @@ app.get('/api/projects/:id/segments', (req, res) => {
 app.post('/api/projects/:id/split', async (req, res) => {
   try {
     await splitText(db, req.params.id);
+    const segments = listSegmentsByProject(db, req.params.id);
+    res.json({ ok: true, segments });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/projects/:id/build-prompts', async (req, res) => {
+  try {
+    await buildPrompts(db, req.params.id);
     const segments = listSegmentsByProject(db, req.params.id);
     res.json({ ok: true, segments });
   } catch (err) {
