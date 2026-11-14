@@ -7,3 +7,4 @@ export * from './prompt-builder';
 export * from './providers';
 export * from './asset-extractor';
 export * from './tts';
+export * from './queue';
