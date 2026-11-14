@@ -4,3 +4,4 @@ export * from './store';
 export * from './llm';
 export * from './splitter';
 export * from './prompt-builder';
+export * from './providers';
