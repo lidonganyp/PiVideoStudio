@@ -22,6 +22,10 @@ interface StyleTemplateConfig {
   cameraGuide: string;
   subtitleStyle: string;
   narrationGuide: string;
+  transitionType: string;
+  transitionDuration: number;
+  bgmStyle: string;
+  bgmVolume: number;
 }
 
 function parseTemplate(md: string): StyleTemplateConfig {
@@ -36,6 +40,10 @@ function parseTemplate(md: string): StyleTemplateConfig {
     cameraGuide: extract('镜头语言指引'),
     subtitleStyle: extract('字幕样式'),
     narrationGuide: extract('旁白风格'),
+    transitionType: extract('转场配置') || 'fade',
+    transitionDuration: parseFloat(extract('转场配置')?.match(/[\d.]+/)?.[0] ?? '0.5'),
+    bgmStyle: extract('配乐基调') || 'ambient',
+    bgmVolume: parseFloat(extract('配乐基调')?.match(/音量[：:]\s*([\d.]+)/)?.[1] ?? '0.3'),
   };
 }
 

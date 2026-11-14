@@ -21,3 +21,14 @@ photorealistic, blurry, low quality, watermark, text overlay, 3d render, soft sh
 - 语速：5~6 字/秒
 - 语气：激昂、戏剧化
 - 人称：第一人称或第三人称
+
+## 转场配置
+- 类型：cut
+- 时长：0.1 秒
+- 方向：硬切
+
+## 配乐基调
+- 风格：电子 / 摇滚
+- 节奏：快板
+- 音量：0.4（ducking 模式）
+- BGM 推荐：energetic, dramatic, action

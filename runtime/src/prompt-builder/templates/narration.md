@@ -21,3 +21,14 @@ blurry, low quality, distorted faces, extra limbs, watermark, text overlay, cart
 - 语速：4~5 字/秒
 - 语气：叙事性、沉浸感
 - 人称：第三人称旁白
+
+## 转场配置
+- 类型：fade
+- 时长：0.5 秒
+- 方向：双向（淡入+淡出）
+
+## 配乐基调
+- 风格：轻柔钢琴 / 弦乐
+- 节奏：慢板
+- 音量：0.3（ducking 模式）
+- BGM 推荐：ambient, emotional, cinematic

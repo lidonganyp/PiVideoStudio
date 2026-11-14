@@ -21,3 +21,14 @@ cartoon, anime, motion comic, stylized, exaggerated, watermark, text overlay
 - 语速：3~4 字/秒
 - 语气：客观、信息密集
 - 人称：第三人称解说
+
+## 转场配置
+- 类型：dissolve
+- 时长：0.8 秒
+- 方向：叠化
+
+## 配乐基调
+- 风格：轻音乐 / 环境
+- 节奏：中板
+- 音量：0.2（ducking 模式）
+- BGM 推荐：documentary, informative, neutral
