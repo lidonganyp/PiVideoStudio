@@ -1,5 +1,6 @@
 import { openDb, migrate } from '@pivideo/runtime';
 import { listJobsByStatus, updateJob, getSegment, transitionSegmentStatus, getVideoProvider } from '@pivideo/runtime';
+import { composeVideo } from './composer';
 import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,24 @@ async function downloadVideo(url: string, destPath: string): Promise<void> {
 }
 
 async function pollOnce(): Promise<void> {
+  // 1. 处理 compose 任务
+  const queuedComposeJobs = listJobsByStatus(db, 'queued').filter(
+    (j) => j.kind === 'compose',
+  );
+  for (const job of queuedComposeJobs) {
+    updateJob(db, job.id, { status: 'running' });
+    try {
+      const result = await composeVideo(db, job.projectId);
+      console.log(
+        `[worker] compose job ${job.id} done: ${result.outputPath} (${result.duration}s)`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[worker] compose job ${job.id} failed: ${message}`);
+    }
+  }
+
+  // 2. 处理视频生成轮询
   const provider = getVideoProvider();
   const runningJobs = listJobsByStatus(db, 'running');
 

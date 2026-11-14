@@ -152,6 +152,32 @@ app.get('/api/projects/:id/jobs', (req, res) => {
   res.json(listJobsByProject(db, req.params.id));
 });
 
+app.post('/api/projects/:id/compose', (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const project = getProject(db, projectId);
+    if (!project) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    const segments = listSegmentsByProject(db, projectId);
+    const allSucceeded = segments.length > 0 && segments.every((s) => s.status === 'succeeded');
+    if (!allSucceeded) {
+      res.status(400).json({ error: '存在未成功的分镜，无法合成' });
+      return;
+    }
+    const job = createJob(db, {
+      projectId,
+      kind: 'compose',
+      provider: 'ffmpeg',
+    });
+    res.json({ ok: true, job });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
 const port = Number(process.env.PORT ?? 3100);
 app.listen(port, () => {
   console.log('[pivideo-api] listening on http://localhost:' + port);
