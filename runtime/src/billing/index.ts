@@ -43,6 +43,11 @@ const PROVIDER_RATES: Record<string, Record<string, { unit: BillingUnit; rate: n
     i2v: { unit: 'seconds', rate: 0.5 },
     t2i: { unit: 'calls', rate: 0.15 },
   },
+  minimax: {
+    t2v: { unit: 'seconds', rate: 0.09 },
+    i2v: { unit: 'seconds', rate: 0.09 },
+    t2i: { unit: 'calls', rate: 0.05 },
+  },
 };
 
 /**

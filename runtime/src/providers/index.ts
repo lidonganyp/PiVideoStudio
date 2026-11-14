@@ -50,16 +50,13 @@ const MOCK_VIDEOS = [
 export class MockProvider implements VideoProvider {
   name = 'mock';
 
-  private jobs = new Map<string, { videoUrl: string; createdAt: number }>();
-
+  /**
+   * 无状态实现：不依赖进程内 Map，保证 API 进程 submit 的任务
+   * 在 worker 进程 query 时同样可见（跨进程共享数据库，但 Map 不共享）。
+   * 延迟判断基于 jobId 内嵌的时间戳，而非进程内存。
+   */
   async submit(job: SubmitJobInput): Promise<SubmitResult> {
     const providerJobId = `mock-${job.segmentId}-${Date.now()}`;
-    const videoUrl = MOCK_VIDEOS[0];
-    // 模拟异步：记录任务，query 时返回成功
-    this.jobs.set(providerJobId, {
-      videoUrl,
-      createdAt: Date.now(),
-    });
     console.log(
       `[mock-provider] submit segmentId=${job.segmentId} providerJobId=${providerJobId}`,
     );
@@ -67,16 +64,134 @@ export class MockProvider implements VideoProvider {
   }
 
   async query(providerJobId: string): Promise<QueryResult> {
-    const job = this.jobs.get(providerJobId);
-    if (!job) {
-      return { status: 'failed', error: `mock job not found: ${providerJobId}` };
-    }
-    // 模拟处理延迟：3 秒后成功
-    const elapsed = Date.now() - job.createdAt;
+    // 从 jobId 末尾解析提交时间戳，模拟 3 秒处理延迟
+    const match = providerJobId.match(/-(\d+)$/);
+    const createdAt = match ? Number(match[1]) : 0;
+    const elapsed = Date.now() - createdAt;
     if (elapsed < 3000) {
       return { status: 'running' };
     }
-    return { status: 'succeeded', videoUrl: job.videoUrl };
+    return { status: 'succeeded', videoUrl: MOCK_VIDEOS[0] };
+  }
+}
+
+// --- MiniMaxProvider ---
+
+/**
+ * MiniMaxProvider：通过 MiniMax H3 API 生成视频。
+ * 支持文生视频（t2v），兼容 metaso.cn 第三方 API。
+ * API 文档: https://github.com/meta-sota/ComfyUI-MiniMaxH3-API
+ */
+export class MiniMaxProvider implements VideoProvider {
+  name = 'minimax';
+
+  private baseUrl: string;
+  private token: string;
+  private model: string;
+  private resolution: string;
+  private duration: number;
+  private ratio: string;
+
+  constructor() {
+    this.baseUrl = process.env.MINIMAX_BASE_URL ?? 'https://metaso.cn/api/minimax';
+    this.token = process.env.MINIMAX_API_KEY ?? '';
+    this.model = process.env.MINIMAX_MODEL ?? 'MiniMax-H3';
+    this.resolution = process.env.MINIMAX_RESOLUTION ?? '768P';
+    this.duration = Number(process.env.MINIMAX_DURATION ?? '5');
+    this.ratio = process.env.MINIMAX_RATIO ?? '16:9';
+
+    if (!this.token) {
+      throw new Error('MINIMAX_API_KEY 未设置，请在 .env 中配置 MiniMax API Key');
+    }
+  }
+
+  async submit(job: SubmitJobInput): Promise<SubmitResult> {
+    const url = `${this.baseUrl}/v2/video_generation`;
+    const body = {
+      model: this.model,
+      content: [{ type: 'text', text: job.prompt }],
+      resolution: this.resolution,
+      duration: Math.min(Math.max(job.estimatedSeconds, 5), 15),
+      ratio: this.ratio,
+      fast_mode: false,
+    };
+
+    console.log(`[minimax-provider] submit segmentId=${job.segmentId} model=${this.model}`);
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`MiniMax submit failed (${resp.status}): ${errText}`);
+    }
+
+    const data = await resp.json() as { task_id?: string; id?: string };
+    const providerJobId = data.task_id ?? data.id ?? '';
+
+    if (!providerJobId) {
+      throw new Error('MiniMax submit failed: 未返回 task_id');
+    }
+
+    console.log(`[minimax-provider] submitted providerJobId=${providerJobId}`);
+    return { providerJobId };
+  }
+
+  async query(providerJobId: string): Promise<QueryResult> {
+    const url = `${this.baseUrl}/v2/query/video_generation/${providerJobId}`;
+
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+      },
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      return { status: 'failed', error: `MiniMax query failed (${resp.status}): ${errText}` };
+    }
+
+    const data = await resp.json() as {
+      status?: string;
+      state?: string;
+      video_url?: string;
+      file_id?: string;
+      error?: string;
+      base_resp?: { status_msg?: string };
+    };
+
+    const rawStatus = (data.status ?? data.state ?? '').toLowerCase();
+
+    // MiniMax 状态映射
+    let status: QueryResult['status'];
+    if (rawStatus === 'succeeded' || rawStatus === 'success' || rawStatus === 'done' || rawStatus === 'completed') {
+      status = 'succeeded';
+    } else if (rawStatus === 'failed' || rawStatus === 'error') {
+      status = 'failed';
+    } else if (rawStatus === 'running' || rawStatus === 'processing' || rawStatus === 'queued') {
+      status = 'running';
+    } else {
+      status = 'pending';
+    }
+
+    const videoUrl = data.video_url ?? data.file_id;
+    const error = data.error ?? data.base_resp?.status_msg;
+
+    if (status === 'failed') {
+      return { status, error: error ?? 'MiniMax 生成失败' };
+    }
+    if (status === 'succeeded' && !videoUrl) {
+      return { status: 'failed', error: 'MiniMax 返回成功但未提供视频 URL' };
+    }
+
+    return { status, videoUrl };
   }
 }
 
@@ -167,6 +282,9 @@ export function getVideoProvider(): VideoProvider {
     case 'mock':
       cachedProvider = new MockProvider();
       break;
+    case 'minimax':
+      cachedProvider = new MiniMaxProvider();
+      break;
     // case 'keling':
     //   cachedProvider = new KelingProvider();
     //   break;
@@ -178,7 +296,7 @@ export function getVideoProvider(): VideoProvider {
     //   break;
     default:
       throw new Error(
-        `未知的 VIDEO_PROVIDER: ${providerName}（当前支持: mock）`,
+        `未知的 VIDEO_PROVIDER: ${providerName}（当前支持: mock, minimax）`,
       );
   }
 

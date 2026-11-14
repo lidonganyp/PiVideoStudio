@@ -1,3 +1,4 @@
+import './env';
 import { openDb, migrate } from '@pivideo/runtime';
 import { listJobsByStatus, updateJob, getSegment, transitionSegmentStatus, getVideoProvider } from '@pivideo/runtime';
 import { composeVideo } from './composer';

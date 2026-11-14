@@ -40,12 +40,153 @@ function getConfig() {
   return { baseUrl, apiKey, model };
 }
 
+/** 判断是否为 LLM mock 模式（无需真实 LLM Key 的全链路测试） */
+export function isLLMMockMode(): boolean {
+  const v = (process.env.LLM_MOCK_MODE ?? '').toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes';
+}
+
+/** 简单标点分句（保留句末标点） */
+function splitSentences(text: string): string[] {
+  const matches = text.match(/[^。！？!?]+[。！？!?]?/g);
+  return matches ? matches.map((s) => s.trim()).filter(Boolean) : [text];
+}
+
+/** 中文人名粗提取：2~3 个连续汉字且非高频词 */
+const STOP_WORDS = new Set([
+  '第一章', '第二章', '第三章', '第四章', '第五章',
+  '无人', '知晓', '一道', '一柄', '狂风', '金光', '云海',
+  '山巅', '城池', '街市', '人声', '少年', '古剑', '剑诀',
+]);
+/** 常见非人名用字，出现在候选词中则排除 */
+const BAD_CHARS = new Set(
+  '站走看说在了中下上一道化作呼啸翻阅握持伸他她它这那有无人知鼎沸繁城剑风狂金云海巅远眺破空至来入'.split(''),
+);
+function extractNames(text: string): string[] {
+  const candidates = text.match(/[\u4e00-\u9fa5]{2,3}/g) ?? [];
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const c of candidates) {
+    if (STOP_WORDS.has(c) || seen.has(c)) continue;
+    if ([...c].some((ch) => BAD_CHARS.has(ch))) continue;
+    seen.add(c);
+    names.push(c);
+    if (names.length >= 3) break;
+  }
+  return names;
+}
+
+/** 剥离 user prompt 中的指令前缀（指令与正文以空行分隔） */
+function stripInstructionPrefix(user: string): string {
+  const idx = user.indexOf('\n\n');
+  return idx >= 0 ? user.slice(idx + 2) : user;
+}
+
+/** 生成确定性 mock 分镜列表 */
+function mockSegments(text: string) {
+  const sentences = splitSentences(text);
+  const segments: Array<{
+    sourceText: string;
+    sceneSummary: string;
+    characterNames: string[];
+    emotion: string;
+    estimatedSeconds: number;
+  }> = [];
+  for (let i = 0; i < sentences.length; i += 2) {
+    const group = sentences.slice(i, i + 2).join('');
+    const names = extractNames(group);
+    segments.push({
+      sourceText: group,
+      sceneSummary: group.length > 20 ? group.slice(0, 20) + '…' : group,
+      characterNames: names,
+      emotion: '平静',
+      estimatedSeconds: Math.max(3, Math.min(10, Math.round(group.length / 4.5))),
+    });
+  }
+  return { segments };
+}
+
+/** 生成确定性 mock 资产 */
+function mockAssets(text: string) {
+  const names = extractNames(text);
+  const characters = names.map((name) => ({
+    name,
+    appearance: `${name}的外貌（mock）`,
+    clothing: `${name}的服装（mock）`,
+    temperament: '沉稳（mock）',
+  }));
+  const scenes = [
+    {
+      name: '主要场景',
+      location: '故事场景（mock）',
+      lighting: '自然光（mock）',
+      props: '基础道具（mock）',
+    },
+  ];
+  return { characters, scenes };
+}
+
+/** 生成确定性 mock 提示词包 */
+function mockPromptBundle(user: string) {
+  const styleMatch = user.match(/风格后缀（必须包含在 visual 末尾）：([^\n]+)/);
+  const styleSuffix = styleMatch ? styleMatch[1].trim() : '';
+  const srcMatch = user.match(/分镜原文：([^\n]+)/);
+  const src = srcMatch ? srcMatch[1].trim() : '';
+  const names = extractNames(src);
+  const anchor = names.length > 0 ? `, ${names[0]} character anchor` : '';
+  const visual = `cinematic shot of ${src || 'scene'}${anchor}, ${styleSuffix}`.trim();
+  const narration = src.length > 40 ? src.slice(0, 40) : src;
+  return {
+    camera: '中景，缓慢推进（mock）',
+    visual,
+    narration,
+    subtitle: narration,
+  };
+}
+
+/** mock 模式下的确定性响应 */
+function mockLLMResponse(system: string, user: string): string {
+  if (system.includes('分镜师')) {
+    return JSON.stringify(mockSegments(stripInstructionPrefix(user)));
+  }
+  if (system.includes('资产提取器')) {
+    return JSON.stringify(mockAssets(stripInstructionPrefix(user)));
+  }
+  if (system.includes('提示词工程师')) {
+    return JSON.stringify(mockPromptBundle(user));
+  }
+  return JSON.stringify({ text: 'mock response' });
+}
+
 /**
  * 调用 LLM，返回纯文本响应。
  * JSON 模式下解析失败自动重试 1 次（追加格式修正指令），仍失败则抛错。
  */
 export async function callLLM(options: CallLLMOptions): Promise<string> {
   const { system, user, responseFormat, temperature } = options;
+
+  // mock 模式：直接返回确定性数据，不访问网络
+  if (isLLMMockMode()) {
+    const content = mockLLMResponse(system, user);
+    lastUsage = {
+      promptTokens: system.length + user.length,
+      completionTokens: content.length,
+      totalTokens: system.length + user.length + content.length,
+    };
+    console.log(
+      `[llm-gateway] MOCK MODE tokens=${JSON.stringify(lastUsage)}`,
+    );
+    if (responseFormat === 'json') {
+      try {
+        JSON.parse(content);
+        return content;
+      } catch {
+        throw new Error('LLM mock 模式返回内容不是合法 JSON');
+      }
+    }
+    return content;
+  }
+
   const { baseUrl, apiKey, model } = getConfig();
 
   const messages = [

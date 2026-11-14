@@ -1,3 +1,4 @@
+import './env';
 import express from 'express';
 import { resolve, join, normalize, sep } from 'node:path';
 import { existsSync, createReadStream, statSync } from 'node:fs';
