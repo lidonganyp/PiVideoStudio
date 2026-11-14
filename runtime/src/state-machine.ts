@@ -19,6 +19,10 @@ export function canTransition(from: ProjectStatus, to: ProjectStatus): boolean {
   return (PROJECT_TRANSITIONS[from] ?? []).includes(to);
 }
 
+export function canSegmentTransition(from: SegmentStatus, to: SegmentStatus): boolean {
+  return (SEGMENT_TRANSITIONS[from] ?? []).includes(to);
+}
+
 /** 分镜状态机 */
 export const SEGMENT_TRANSITIONS: Record<SegmentStatus, SegmentStatus[]> = {
   draft: ['prompt_ready'],

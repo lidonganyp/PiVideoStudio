@@ -1,19 +1,27 @@
 import express from 'express';
-import { randomUUID } from 'node:crypto';
-import type { VideoProject } from '@pivideo/runtime';
+import {
+  openDb,
+  migrate,
+  createProject,
+  getProject,
+  listProjects,
+  type CreateProjectInput,
+} from '@pivideo/runtime';
+import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
 
 const app = express();
 app.use(express.json());
 
-// 内存存储：骨架阶段先用内存，后续替换为数据库
-const projects = new Map<string, VideoProject>();
+// 持久化层：SQLite（node:sqlite），启动时自动建表
+const db = openDb();
+migrate(db);
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'pivideo-api' });
 });
 
 app.get('/api/projects', (_req, res) => {
-  res.json(Array.from(projects.values()));
+  res.json(listProjects(db));
 });
 
 app.post('/api/projects', (req, res) => {
@@ -22,23 +30,18 @@ app.post('/api/projects', (req, res) => {
     res.status(400).json({ error: 'title is required' });
     return;
   }
-  const now = new Date().toISOString();
-  const project: VideoProject = {
-    id: randomUUID(),
+  const input: CreateProjectInput = {
     title,
     novelSource: { chapterIds: chapterIds ?? [], rawText },
-    style: style ?? 'narration',
-    aspectRatio: aspectRatio ?? '9:16',
-    status: 'planning',
-    createdAt: now,
-    updatedAt: now,
+    style: (style ?? 'narration') as StyleTemplate,
+    aspectRatio: (aspectRatio ?? '9:16') as AspectRatio,
   };
-  projects.set(project.id, project);
+  const project = createProject(db, input);
   res.status(201).json(project);
 });
 
 app.get('/api/projects/:id', (req, res) => {
-  const project = projects.get(req.params.id);
+  const project = getProject(db, req.params.id);
   if (!project) {
     res.status(404).json({ error: 'not found' });
     return;

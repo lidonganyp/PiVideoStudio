@@ -5,9 +5,13 @@
   "type": "module",
   "description": "PiVideoStudio：小说转视频生成平台（独立开发，后续与 PiNovelStudio 融合）",
   "packageManager": "pnpm@10.26.2",
-  "engines": { "node": ">=20.19" },
+  "engines": {
+    "node": ">=20.19"
+  },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "scripts": {
     "dev:api": "pnpm --filter @pivideo/api dev",

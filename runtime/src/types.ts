@@ -88,4 +88,5 @@ export interface VideoJob {
   resultPath?: string;
   error?: string;
   createdAt: string;
+  updatedAt: string;
 }
