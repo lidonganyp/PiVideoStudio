@@ -1,4 +1,6 @@
 import express from 'express';
+import { resolve, join, normalize, sep } from 'node:path';
+import { existsSync, createReadStream, statSync } from 'node:fs';
 import {
   openDb,
   migrate,
@@ -56,7 +58,12 @@ app.get('/api/projects/:id', (req, res) => {
     res.status(404).json({ error: 'not found' });
     return;
   }
-  res.json(project);
+  // 检查成片是否存在
+  const finalPath = resolve('storage', 'output', project.id, 'final.mp4');
+  const finalVideoUrl = existsSync(finalPath)
+    ? `/files/output/${project.id}/final.mp4`
+    : undefined;
+  res.json({ ...project, finalVideoUrl });
 });
 
 app.get('/api/projects/:id/segments', (req, res) => {
@@ -179,6 +186,28 @@ app.post('/api/projects/:id/compose', (req, res) => {
 });
 
 const port = Number(process.env.PORT ?? 3100);
+
+// 静态文件服务：映射 storage 目录，带路径穿越防护
+const STORAGE_DIR = resolve('storage');
+app.get('/files/*', (req, res) => {
+  const reqPath = req.path.replace(/^\/files\//, '');
+  const filePath = normalize(join(STORAGE_DIR, reqPath));
+  // 防止路径穿越：确保解析后的路径在 storage 目录内
+  if (!filePath.startsWith(STORAGE_DIR + sep) && filePath !== STORAGE_DIR) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  const stream = createReadStream(filePath);
+  stream.on('error', () => {
+    res.status(500).json({ error: 'read error' });
+  });
+  stream.pipe(res);
+});
+
 app.listen(port, () => {
   console.log('[pivideo-api] listening on http://localhost:' + port);
 });
