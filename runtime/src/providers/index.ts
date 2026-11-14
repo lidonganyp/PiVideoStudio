@@ -15,6 +15,8 @@ export interface SubmitJobInput {
   aspectRatio: string;
   /** 预计时长（秒） */
   estimatedSeconds: number;
+  /** 参考图路径（i2v 模式） */
+  referenceImagePath?: string;
 }
 
 export interface SubmitResult {
@@ -78,6 +80,76 @@ export class MockProvider implements VideoProvider {
   }
 }
 
+// --- ImageProvider 接口 ---
+
+export interface ImageSubmitInput {
+  /** 资产卡 ID */
+  assetId: string;
+  /** 英文画面提示词 */
+  prompt: string;
+  /** 负面提示词 */
+  negative?: string;
+  /** 画幅比例 */
+  aspectRatio: string;
+}
+
+export interface ImageResult {
+  imageUrl: string;
+}
+
+export interface ImageProvider {
+  name: string;
+  submit(job: ImageSubmitInput): Promise<{ providerJobId: string }>;
+  query(providerJobId: string): Promise<{
+    status: 'pending' | 'running' | 'succeeded' | 'failed';
+    images?: ImageResult[];
+    error?: string;
+  }>;
+}
+
+// --- MockImageProvider ---
+
+const MOCK_IMAGES = [
+  'https://picsum.photos/seed/pivideo-1/512/768',
+  'https://picsum.photos/seed/pivideo-2/512/768',
+  'https://picsum.photos/seed/pivideo-3/512/768',
+  'https://picsum.photos/seed/pivideo-4/512/768',
+];
+
+export class MockImageProvider implements ImageProvider {
+  name = 'mock-image';
+
+  private jobs = new Map<string, { images: ImageResult[]; createdAt: number }>();
+
+  async submit(job: ImageSubmitInput): Promise<{ providerJobId: string }> {
+    const providerJobId = `mock-img-${job.assetId}-${Date.now()}`;
+    this.jobs.set(providerJobId, {
+      images: MOCK_IMAGES.map((url) => ({ imageUrl: url })),
+      createdAt: Date.now(),
+    });
+    console.log(
+      `[mock-image-provider] submit assetId=${job.assetId} providerJobId=${providerJobId}`,
+    );
+    return { providerJobId };
+  }
+
+  async query(providerJobId: string): Promise<{
+    status: 'pending' | 'running' | 'succeeded' | 'failed';
+    images?: ImageResult[];
+    error?: string;
+  }> {
+    const job = this.jobs.get(providerJobId);
+    if (!job) {
+      return { status: 'failed', error: `mock image job not found: ${providerJobId}` };
+    }
+    const elapsed = Date.now() - job.createdAt;
+    if (elapsed < 2000) {
+      return { status: 'running' };
+    }
+    return { status: 'succeeded', images: job.images };
+  }
+}
+
 // --- Provider 工厂 ---
 
 let cachedProvider: VideoProvider | undefined;
@@ -112,4 +184,29 @@ export function getVideoProvider(): VideoProvider {
 
   console.log(`[provider-gateway] 使用视频供应商: ${cachedProvider.name}`);
   return cachedProvider;
+}
+
+let cachedImageProvider: ImageProvider | undefined;
+
+/**
+ * 根据环境变量 IMAGE_PROVIDER 选择图片供应商。
+ * 默认 mock。
+ */
+export function getImageProvider(): ImageProvider {
+  if (cachedImageProvider) return cachedImageProvider;
+
+  const providerName = process.env.IMAGE_PROVIDER ?? 'mock';
+
+  switch (providerName) {
+    case 'mock':
+      cachedImageProvider = new MockImageProvider();
+      break;
+    default:
+      throw new Error(
+        `未知的 IMAGE_PROVIDER: ${providerName}（当前支持: mock）`,
+      );
+  }
+
+  console.log(`[provider-gateway] 使用图片供应商: ${cachedImageProvider.name}`);
+  return cachedImageProvider;
 }
