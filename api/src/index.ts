@@ -25,6 +25,7 @@ import {
   insertSegmentVersion,
   listSegmentVersions,
   updateSegment,
+  generateTTS,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -250,6 +251,16 @@ app.get('/api/segments/:id/versions', (req, res) => {
     return;
   }
   res.json(listSegmentVersions(db, seg.id));
+});
+
+app.post('/api/projects/:id/generate-tts', async (req, res) => {
+  try {
+    await generateTTS(db, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
 });
 
 app.post('/api/projects/:id/generate-segments', async (req, res) => {
