@@ -142,3 +142,63 @@ export function createBudgetLedgerEntry(
     syncedAt: new Date().toISOString(),
   };
 }
+
+/** N3 费用预估结果 */
+export interface CostEstimate {
+  provider: string;
+  /** 分镜数 */
+  segmentCount: number;
+  /** 预估总时长（秒） */
+  totalSeconds: number;
+  /** 视频生成费用（元） */
+  videoCost: number;
+  /** 参考图费用（元，角色卡×1 + 首场景×1） */
+  imageCost: number;
+  /** TTS 费用（元） */
+  ttsCost: number;
+  /** 合计（元） */
+  totalCost: number;
+  /** 费率说明 */
+  rateDetail: { unit: BillingUnit; rate: number };
+}
+
+/**
+ * N3 费用预估：按分镜预估总时长 × provider 费率计算。
+ * 规则：
+ * - t2v 按分镜 estimatedSeconds 累计 × 秒费率；calls 计费则按分镜数
+ * - t2i 固定 2 张（主角参考图 + 首场景概念图），按张计费
+ * - tts 按分镜数 × 次费率
+ */
+export function estimateProjectCost(
+  provider: string,
+  segments: Array<{ estimatedSeconds: number }>,
+): CostEstimate {
+  const rates = PROVIDER_RATES[provider] ?? PROVIDER_RATES.mock;
+  const t2vRate = rates.t2v ?? { unit: 'calls' as BillingUnit, rate: 0 };
+  const t2iRate = rates.t2i ?? { unit: 'calls' as BillingUnit, rate: 0 };
+  const ttsRate = rates.tts ?? { unit: 'calls' as BillingUnit, rate: 0 };
+
+  const segmentCount = segments.length;
+  const totalSeconds = segments.reduce(
+    (sum, s) => sum + (Number(s.estimatedSeconds) || 5),
+    0,
+  );
+
+  const videoCost =
+    t2vRate.unit === 'seconds'
+      ? totalSeconds * t2vRate.rate
+      : segmentCount * t2vRate.rate;
+  const imageCost = 2 * t2iRate.rate;
+  const ttsCost = segmentCount * ttsRate.rate;
+
+  return {
+    provider,
+    segmentCount,
+    totalSeconds: Math.round(totalSeconds * 10) / 10,
+    videoCost: Math.round(videoCost * 100) / 100,
+    imageCost: Math.round(imageCost * 100) / 100,
+    ttsCost: Math.round(ttsCost * 100) / 100,
+    totalCost: Math.round((videoCost + imageCost + ttsCost) * 100) / 100,
+    rateDetail: t2vRate,
+  };
+}

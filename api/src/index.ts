@@ -28,6 +28,9 @@ import {
   updateSegment,
   generateTTS,
   getProjectCostSummary,
+  analyzeStory,
+  estimateProjectCost,
+  getVideoProviderName,
   STORAGE_DIR,
   type CreateProjectInput,
 } from '@pivideo/runtime';
@@ -85,6 +88,32 @@ app.get('/api/projects/:id/segments', (req, res) => {
     return;
   }
   res.json(listSegmentsByProject(db, req.params.id));
+});
+
+app.post('/api/projects/:id/analyze-story', async (req, res) => {
+  try {
+    const profile = await analyzeStory(db, req.params.id);
+    res.json({ ok: true, storyProfile: profile });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/projects/:id/estimate', (req, res) => {
+  try {
+    const segments = listSegmentsByProject(db, req.params.id);
+    if (segments.length === 0) {
+      res.status(400).json({ error: '项目还没有分镜，请先完成场景切片' });
+      return;
+    }
+    const providerName = getVideoProviderName();
+    const estimate = estimateProjectCost(providerName, segments);
+    res.json({ ok: true, estimate });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
 });
 
 app.post('/api/projects/:id/split', async (req, res) => {

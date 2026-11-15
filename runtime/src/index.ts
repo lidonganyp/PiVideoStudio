@@ -3,6 +3,7 @@ export * from './storage';
 export * from './state-machine';
 export * from './store';
 export * from './llm';
+export * from './story-analyzer';
 export * from './splitter';
 export * from './prompt-builder';
 export * from './providers';

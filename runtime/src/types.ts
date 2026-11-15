@@ -1,4 +1,5 @@
 // 领域模型：项目 / 分镜 / 资产 / 任务
+import type { StoryProfile } from './story-analyzer';
 
 export type AspectRatio = '9:16' | '16:9';
 
@@ -33,7 +34,13 @@ export type SegmentStatus =
 export interface VideoProject {
   id: string;
   title: string;
-  novelSource: { projectId?: string; chapterIds: string[]; rawText?: string };
+  novelSource: {
+    projectId?: string;
+    chapterIds: string[];
+    rawText?: string;
+    /** N1 文本解析产出的全片级故事档案 */
+    storyProfile?: StoryProfile;
+  };
   style: StyleTemplate;
   aspectRatio: AspectRatio;
   status: ProjectStatus;

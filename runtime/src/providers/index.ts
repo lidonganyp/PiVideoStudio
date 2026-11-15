@@ -275,6 +275,11 @@ export class MockImageProvider implements ImageProvider {
 
 // --- Provider 工厂 ---
 
+/** 返回当前配置的视频供应商名称（不实例化，供费用预估等轻量场景使用） */
+export function getVideoProviderName(): string {
+  return process.env.VIDEO_PROVIDER ?? 'mock';
+}
+
 let cachedProvider: VideoProvider | undefined;
 
 /**
