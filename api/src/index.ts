@@ -28,6 +28,7 @@ import {
   updateSegment,
   generateTTS,
   getProjectCostSummary,
+  STORAGE_DIR,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
@@ -70,7 +71,7 @@ app.get('/api/projects/:id', (req, res) => {
     return;
   }
   // 检查成片是否存在
-  const finalPath = resolve('storage', 'output', project.id, 'final.mp4');
+  const finalPath = resolve(STORAGE_DIR, 'output', project.id, 'final.mp4');
   const finalVideoUrl = existsSync(finalPath)
     ? `/files/output/${project.id}/final.mp4`
     : undefined;
@@ -372,7 +373,6 @@ app.post('/api/projects/:id/compose', (req, res) => {
 const port = Number(process.env.PORT ?? 3100);
 
 // 静态文件服务：映射 storage 目录，带路径穿越防护
-const STORAGE_DIR = resolve('storage');
 app.get('/files/*', (req, res) => {
   const reqPath = req.path.replace(/^\/files\//, '');
   const filePath = normalize(join(STORAGE_DIR, reqPath));

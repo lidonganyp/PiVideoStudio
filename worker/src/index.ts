@@ -40,11 +40,16 @@ async function pollOnce(): Promise<void> {
     updateJob(db, job.id, { status: 'running' });
     try {
       const result = await composeVideo(db, job.projectId);
+      updateJob(db, job.id, {
+        status: 'succeeded',
+        resultPath: result.outputPath,
+      });
       console.log(
         `[worker] compose job ${job.id} done: ${result.outputPath} (${result.duration}s)`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      updateJob(db, job.id, { status: 'failed', error: message });
       console.error(`[worker] compose job ${job.id} failed: ${message}`);
     }
   }

@@ -1,4 +1,5 @@
 export * from './types';
+export * from './storage';
 export * from './state-machine';
 export * from './store';
 export * from './llm';

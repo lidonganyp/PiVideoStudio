@@ -7,8 +7,7 @@ import {
   getProject,
   listSegmentsByProject,
   transitionProjectStatus,
-  createJob,
-  updateJob,
+  STORAGE_DIR,
 } from '@pivideo/runtime';
 
 const execFileAsync = promisify(execFile);
@@ -46,11 +45,14 @@ async function transcodeSegment(
   const width = isPortrait ? 1080 : 1920;
   const height = isPortrait ? 1920 : 1080;
 
+  const duration = await getVideoDuration(inputPath);
+  const fadeOutStart = Math.max(0, duration - fadeDuration);
+
   const vf = [
     `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
     `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
     `fade=t=in:st=0:d=${fadeDuration}`,
-    `fade=t=out:st=duration-d=${fadeDuration}:d=${fadeDuration}`,
+    `fade=t=out:st=${fadeOutStart}:d=${fadeDuration}`,
   ].join(',');
 
   await execFileAsync('ffmpeg', [
@@ -194,16 +196,10 @@ export async function composeVideo(
     throw new Error('没有可合成的分镜');
   }
 
-  const job = createJob(db, {
-    projectId,
-    kind: 'compose',
-    provider: 'ffmpeg',
-  });
-
   transitionProjectStatus(db, projectId, 'composing');
 
   try {
-    const outputDir = resolve('storage', 'output', projectId);
+    const outputDir = resolve(STORAGE_DIR, 'output', projectId);
     mkdirSync(outputDir, { recursive: true });
     const outputPath = resolve(outputDir, 'final.mp4');
     const coverPath = resolve(outputDir, 'cover.jpg');
@@ -213,7 +209,7 @@ export async function composeVideo(
     // 1. 转码每个片段（带淡入淡出）
     const transcodedPaths: string[] = [];
     for (const seg of succeeded) {
-      const segVideoDir = resolve('storage', 'videos', seg.id);
+      const segVideoDir = resolve(STORAGE_DIR, 'videos', seg.id);
       const segVideoPath = resolve(segVideoDir, `v${seg.currentVersion}.mp4`);
       if (!existsSync(segVideoPath)) {
         throw new Error(`分镜视频文件不存在: ${segVideoPath}`);
@@ -230,7 +226,7 @@ export async function composeVideo(
     let currentPath = concatPath;
 
     // 3. 混入旁白音轨（如果存在）
-    const audioDir = resolve('storage', 'audio', projectId);
+    const audioDir = resolve(STORAGE_DIR, 'audio', projectId);
     const narrationPath = resolve(audioDir, 'narration_full.mp3');
     if (existsSync(narrationPath)) {
       const narratedPath = resolve(outputDir, 'narrated_tmp.mp4');
@@ -273,11 +269,6 @@ export async function composeVideo(
       );
     }
 
-    updateJob(db, job.id, {
-      status: 'succeeded',
-      resultPath: outputPath,
-    });
-
     transitionProjectStatus(db, projectId, 'delivering');
     transitionProjectStatus(db, projectId, 'done');
 
@@ -286,11 +277,6 @@ export async function composeVideo(
     );
     return { outputPath, duration, coverPath };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    updateJob(db, job.id, {
-      status: 'failed',
-      error: message,
-    });
     try {
       transitionProjectStatus(db, projectId, 'failed');
       // 忽略状态流转错误

@@ -9,6 +9,7 @@ import {
   createJob,
   updateJob,
 } from '../store';
+import { STORAGE_DIR } from '../storage';
 
 const execFileAsync = promisify(execFile);
 
@@ -102,7 +103,7 @@ export async function generateTTS(
   });
 
   try {
-    const audioDir = resolve('storage', 'audio', projectId);
+    const audioDir = resolve(STORAGE_DIR, 'audio', projectId);
     mkdirSync(audioDir, { recursive: true });
 
     const ttsVoice = process.env.TTS_VOICE;
