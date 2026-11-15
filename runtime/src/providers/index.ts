@@ -159,6 +159,10 @@ export class MiniMaxProvider implements VideoProvider {
     }
 
     const data = await resp.json() as {
+      task?: {
+        status?: string;
+        content?: { url?: string };
+      };
       status?: string;
       state?: string;
       video_url?: string;
@@ -167,7 +171,10 @@ export class MiniMaxProvider implements VideoProvider {
       base_resp?: { status_msg?: string };
     };
 
-    const rawStatus = (data.status ?? data.state ?? '').toLowerCase();
+    // 真实 API 结构：{ task: { status, content: { url } } }（兼容扁平结构）
+    const rawStatus = (
+      data.task?.status ?? data.status ?? data.state ?? ''
+    ).toLowerCase();
 
     // MiniMax 状态映射
     let status: QueryResult['status'];
@@ -181,7 +188,8 @@ export class MiniMaxProvider implements VideoProvider {
       status = 'pending';
     }
 
-    const videoUrl = data.video_url ?? data.file_id;
+    const videoUrl =
+      data.task?.content?.url ?? data.video_url ?? data.file_id;
     const error = data.error ?? data.base_resp?.status_msg;
 
     if (status === 'failed') {
