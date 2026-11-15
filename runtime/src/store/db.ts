@@ -114,4 +114,15 @@ export function migrate(db: DatabaseSync): void {
       db.exec(`ALTER TABLE video_segments ADD COLUMN ${column} ${ddl}`);
     }
   }
+
+  // 幂等列迁移：video_assets 候选参考图字段
+  const assetColumns = db
+    .prepare("PRAGMA table_info(video_assets)")
+    .all() as Array<{ name: string }>;
+  const assetExisting = new Set(assetColumns.map((c) => c.name));
+  if (!assetExisting.has('candidate_images')) {
+    db.exec(
+      "ALTER TABLE video_assets ADD COLUMN candidate_images TEXT NOT NULL DEFAULT '[]'",
+    );
+  }
 }

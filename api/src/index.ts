@@ -1,7 +1,18 @@
 import './env';
 import express from 'express';
 import { resolve, join, normalize, sep } from 'node:path';
-import { existsSync, createReadStream, statSync } from 'node:fs';
+import {
+  existsSync,
+  createReadStream,
+  statSync,
+  mkdirSync,
+  mkdtempSync,
+  copyFileSync,
+  readdirSync,
+  rmSync,
+} from 'node:fs';
+import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import {
   openDb,
   migrate,
@@ -14,6 +25,7 @@ import {
   listJobsByProject,
   createJob,
   updateJob,
+  getJob,
   getSegment,
   transitionSegmentStatus,
   transitionProjectStatus,
@@ -34,7 +46,7 @@ import {
   STORAGE_DIR,
   type CreateProjectInput,
 } from '@pivideo/runtime';
-import type { AspectRatio, StyleTemplate } from '@pivideo/runtime';
+import type { AspectRatio, StyleTemplate, VideoJob } from '@pivideo/runtime';
 
 const app = express();
 app.use(express.json());
@@ -171,7 +183,32 @@ app.post('/api/assets/:id/generate-images', async (req, res) => {
       prompt: asset.description,
       aspectRatio: '9:16',
     });
-    res.json({ ok: true, providerJobId: submitResult.providerJobId });
+    // 在线轮询等待候选图就绪（最多 30s，mock 模式约 2s）
+    const deadline = Date.now() + 30_000;
+    let images: string[] = [];
+    let lastError = '';
+    while (Date.now() < deadline) {
+      const query = await provider.query(submitResult.providerJobId);
+      if (query.status === 'succeeded' && query.images) {
+        images = query.images.map((img) => img.imageUrl);
+        break;
+      }
+      if (query.status === 'failed') {
+        lastError = query.error ?? 'image generation failed';
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (images.length === 0) {
+      res.status(500).json({
+        error: lastError || '候选图生成超时（30s），请重试',
+      });
+      return;
+    }
+    // 候选图写入资产（select-image 确认后清空）
+    updateAsset(db, asset.id, { candidateImages: images });
+    const assets = listAssetsByProject(db, asset.projectId);
+    res.json({ ok: true, assets });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
@@ -190,7 +227,11 @@ app.put('/api/assets/:id/select-image', (req, res) => {
       res.status(400).json({ error: 'imagePath is required' });
       return;
     }
-    const updated = updateAsset(db, asset.id, { referenceImagePath: imagePath });
+    // 确认选定图，同时清空候选列表
+    const updated = updateAsset(db, asset.id, {
+      referenceImagePath: imagePath,
+      candidateImages: [],
+    });
     res.json({ ok: true, asset: updated });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -289,6 +330,132 @@ app.post('/api/projects/:id/generate-tts', async (req, res) => {
   try {
     await generateTTS(db, req.params.id);
     res.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/projects/:id/generate-sample', async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const project = getProject(db, projectId);
+    if (!project) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    const segments = listSegmentsByProject(db, projectId);
+    const ready = segments.filter((s) => s.status === 'prompt_ready');
+    if (ready.length === 0) {
+      res.status(400).json({ error: '没有 prompt_ready 状态的分镜，请先生成提示词' });
+      return;
+    }
+    // 只取第一个待生成分镜作为样片
+    const sample = ready[0];
+    const provider = getVideoProvider();
+    transitionProjectStatus(db, projectId, 'segment_generating');
+    transitionSegmentStatus(db, sample.id, 'queued');
+    const job = createJob(db, {
+      projectId,
+      segmentId: sample.id,
+      kind: 't2v',
+      provider: provider.name,
+    });
+    const submitResult = await provider.submit({
+      segmentId: sample.id,
+      prompt: sample.prompt?.visual ?? '',
+      negative: sample.prompt?.negative,
+      aspectRatio: project.aspectRatio,
+      estimatedSeconds: sample.estimatedSeconds,
+    });
+    updateJob(db, job.id, {
+      providerJobId: submitResult.providerJobId,
+      status: 'running',
+    });
+    transitionSegmentStatus(db, sample.id, 'submitted');
+    res.json({ ok: true, job, segmentId: sample.id });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/projects/:id/export', async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const project = getProject(db, projectId);
+    if (!project) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    const segments = listSegmentsByProject(db, projectId);
+    const jobs = listJobsByProject(db, projectId).filter(
+      (j) => j.kind === 't2v' && j.status === 'succeeded' && j.resultPath,
+    );
+    if (jobs.length === 0) {
+      res.status(400).json({ error: '没有已生成的视频片段可导出' });
+      return;
+    }
+    // 准备打包目录：按分镜顺序命名
+    const exportDir = mkdtempSync(join(tmpdir(), `pivideo-export-${projectId}-`));
+    let copied = 0;
+    for (const job of jobs) {
+      if (!job.resultPath || !existsSync(job.resultPath)) continue;
+      const seg = segments.find((s) => s.id === job.segmentId);
+      const order = seg ? String(seg.order).padStart(3, '0') : 'unknown';
+      const destName = `segment-${order}.mp4`;
+      copyFileSync(job.resultPath, join(exportDir, destName));
+      copied += 1;
+    }
+    if (copied === 0) {
+      rmSync(exportDir, { recursive: true, force: true });
+      res.status(400).json({ error: '片段文件不存在，可能已被清理' });
+      return;
+    }
+    // 生成 ffmpeg 合成脚本（本地执行参考）
+    const listFile = join(exportDir, 'concat-list.txt');
+    const sorted = readdirSync(exportDir)
+      .filter((f) => f.endsWith('.mp4'))
+      .sort();
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      listFile,
+      sorted.map((f) => `file '${f}'`).join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(exportDir, 'compose.sh'),
+      `#!/usr/bin/env bash\n# 本地合成脚本：把全部片段拼接为成片（需本机安装 ffmpeg）\ncd "$(dirname \"$0\")"\nffmpeg -y -f concat -safe 0 -i concat-list.txt -c copy final.mp4\necho \"成片已生成: $(pwd)/final.mp4\"\n`,
+      'utf-8',
+    );
+    // 打包 zip
+    const zipName = `pivideo-${project.title.replace(/[^\w\u4e00-\u9fa5-]/g, '_')}-segments.zip`;
+    const zipPath = join(tmpdir(), zipName);
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      execFile(
+        'zip',
+        ['-r', zipPath, '.'],
+        { cwd: exportDir },
+        (err) => {
+          if (err) rejectPromise(new Error(`zip 打包失败: ${err.message}`));
+          else resolvePromise();
+        },
+      );
+    });
+    rmSync(exportDir, { recursive: true, force: true });
+    // 发送 zip 文件
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(zipName)}`,
+    );
+    const stream = createReadStream(zipPath);
+    stream.on('end', () => rmSync(zipPath, { force: true }));
+    stream.on('error', () => {
+      rmSync(zipPath, { force: true });
+      if (!res.headersSent) res.status(500).json({ error: 'read error' });
+    });
+    stream.pipe(res);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });

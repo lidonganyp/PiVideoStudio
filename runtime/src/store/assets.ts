@@ -9,6 +9,7 @@ interface AssetRow {
   name: string;
   description: string;
   reference_image_path: string | null;
+  candidate_images: string;
 }
 
 function rowToAsset(row: AssetRow): AssetCard {
@@ -19,6 +20,9 @@ function rowToAsset(row: AssetRow): AssetCard {
     name: row.name,
     description: row.description,
     referenceImagePath: row.reference_image_path ?? undefined,
+    candidateImages: row.candidate_images
+      ? (JSON.parse(row.candidate_images) as string[])
+      : [],
   };
 }
 
@@ -28,6 +32,7 @@ export interface CreateAssetInput {
   name: string;
   description: string;
   referenceImagePath?: string;
+  candidateImages?: string[];
 }
 
 export function createAsset(db: DatabaseSync, input: CreateAssetInput): AssetCard {
@@ -38,11 +43,12 @@ export function createAsset(db: DatabaseSync, input: CreateAssetInput): AssetCar
     name: input.name,
     description: input.description,
     referenceImagePath: input.referenceImagePath,
+    candidateImages: input.candidateImages ?? [],
   };
   db.prepare(
     `INSERT INTO video_assets
-       (id, project_id, kind, name, description, reference_image_path)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (id, project_id, kind, name, description, reference_image_path, candidate_images)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     asset.id,
     asset.projectId,
@@ -50,6 +56,7 @@ export function createAsset(db: DatabaseSync, input: CreateAssetInput): AssetCar
     asset.name,
     asset.description,
     asset.referenceImagePath ?? null,
+    JSON.stringify(asset.candidateImages),
   );
   return asset;
 }
@@ -80,6 +87,7 @@ export interface UpdateAssetFields {
   name?: string;
   description?: string;
   referenceImagePath?: string;
+  candidateImages?: string[];
 }
 
 export function updateAsset(
@@ -92,9 +100,15 @@ export function updateAsset(
   const next: AssetCard = { ...existing, ...fields };
   db.prepare(
     `UPDATE video_assets
-       SET name = ?, description = ?, reference_image_path = ?
+       SET name = ?, description = ?, reference_image_path = ?, candidate_images = ?
      WHERE id = ?`,
-  ).run(next.name, next.description, next.referenceImagePath ?? null, id);
+  ).run(
+    next.name,
+    next.description,
+    next.referenceImagePath ?? null,
+    JSON.stringify(next.candidateImages),
+    id,
+  );
   return next;
 }
 

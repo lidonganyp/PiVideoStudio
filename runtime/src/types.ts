@@ -85,6 +85,8 @@ export interface AssetCard {
   name: string;
   description: string;
   referenceImagePath?: string;
+  /** 候选参考图列表（4 选 1 确认前暂存） */
+  candidateImages: string[];
 }
 
 export type JobKind = 't2i' | 'i2v' | 't2v' | 'tts' | 'compose';
