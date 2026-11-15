@@ -1,5 +1,4 @@
 const BASE = '';
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
@@ -12,10 +11,39 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return resp.json();
 }
 
+export interface StoryProfile {
+  genre: string;
+  narrativeTone: string;
+  mainPlot: string;
+  characters: Array<{
+    name: string;
+    role: string;
+    relations: string;
+    visualAnchor: string;
+  }>;
+  worldSetting: string;
+  visualStyleHint: string;
+}
+
+export interface CostEstimate {
+  provider: string;
+  segmentCount: number;
+  totalSeconds: number;
+  videoCost: number;
+  imageCost: number;
+  ttsCost: number;
+  totalCost: number;
+  rateDetail: { unit: string; rate: number };
+}
+
 export interface Project {
   id: string;
   title: string;
-  novelSource: { chapterIds: string[]; rawText?: string };
+  novelSource: {
+    chapterIds: string[];
+    rawText?: string;
+    storyProfile?: StoryProfile;
+  };
   style: string;
   aspectRatio: string;
   status: string;
@@ -33,6 +61,9 @@ export interface Segment {
   characterNames: string[];
   emotion: string;
   estimatedSeconds: number;
+  event: string;
+  characterState: string;
+  nextSceneHint: string;
   status: string;
   currentVersion: number;
   prompt?: {
@@ -94,4 +125,14 @@ export const api = {
     request<{ ok: boolean; job: Job }>(`/api/projects/${id}/compose`, {
       method: 'POST',
     }),
+  analyzeStory: (id: string) =>
+    request<{ ok: boolean; storyProfile: StoryProfile }>(
+      `/api/projects/${id}/analyze-story`,
+      { method: 'POST' },
+    ),
+  estimate: (id: string) =>
+    request<{ ok: boolean; estimate: CostEstimate }>(
+      `/api/projects/${id}/estimate`,
+      { method: 'POST' },
+    ),
 };
