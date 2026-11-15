@@ -155,7 +155,11 @@ async function generateSample() {
   actionLoading.value = 'sample';
   error.value = '';
   try {
-    await api.buildPrompts(projectId);
+    // 仅当没有 prompt_ready 分镜时才构建提示词（重复调用会因无 draft 分镜报错）
+    const hasReady = segments.value.some((s) => s.status === 'prompt_ready');
+    if (!hasReady) {
+      await api.buildPrompts(projectId);
+    }
     const res = await api.generateSample(projectId);
     sampleSegmentId.value = res.segmentId;
     sampleReady.value = false;

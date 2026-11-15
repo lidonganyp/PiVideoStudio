@@ -364,18 +364,27 @@ app.post('/api/projects/:id/generate-sample', async (req, res) => {
       kind: 't2v',
       provider: provider.name,
     });
-    const submitResult = await provider.submit({
-      segmentId: sample.id,
-      prompt: sample.prompt?.visual ?? '',
-      negative: sample.prompt?.negative,
-      aspectRatio: project.aspectRatio,
-      estimatedSeconds: sample.estimatedSeconds,
-    });
-    updateJob(db, job.id, {
-      providerJobId: submitResult.providerJobId,
-      status: 'running',
-    });
-    transitionSegmentStatus(db, sample.id, 'submitted');
+    try {
+      const submitResult = await provider.submit({
+        segmentId: sample.id,
+        prompt: sample.prompt?.visual ?? '',
+        negative: sample.prompt?.negative,
+        aspectRatio: project.aspectRatio,
+        estimatedSeconds: sample.estimatedSeconds,
+      });
+      updateJob(db, job.id, {
+        providerJobId: submitResult.providerJobId,
+        status: 'running',
+      });
+      transitionSegmentStatus(db, sample.id, 'submitted');
+    } catch (err) {
+      // 提交失败（如 429 限流）：回滚 job/segment 状态，避免卡死（failed 可经 regenerate 恢复）
+      const message = err instanceof Error ? err.message : String(err);
+      updateJob(db, job.id, { status: 'failed', error: message });
+      transitionSegmentStatus(db, sample.id, 'failed');
+      res.status(502).json({ error: `样片提交失败: ${message}` });
+      return;
+    }
     res.json({ ok: true, job, segmentId: sample.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -474,7 +483,10 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
       return;
     }
     const segments = listSegmentsByProject(db, projectId);
-    const ready = segments.filter((s) => s.status === 'prompt_ready');
+    // prompt_ready + failed（如 429 限流失败，已有 prompt 可直接重提；failed→queued 为合法转换）
+    const ready = segments.filter(
+      (s) => s.status === 'prompt_ready' || (s.status === 'failed' && s.prompt),
+    );
     if (ready.length === 0) {
       res.status(400).json({ error: '没有 prompt_ready 状态的分镜可生成' });
       return;
@@ -482,7 +494,8 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
     const provider = getVideoProvider();
     const concurrency = Number(process.env.GENERATE_CONCURRENCY ?? 3);
     transitionProjectStatus(db, projectId, 'segment_generating');
-    const jobs = [];
+    const jobs: VideoJob[] = [];
+    const errors: Array<{ segmentId: string; error: string }> = [];
     for (let i = 0; i < ready.length; i += concurrency) {
       const batch = ready.slice(i, i + concurrency);
       const results = await Promise.all(
@@ -494,24 +507,40 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
             kind: 't2v',
             provider: provider.name,
           });
-          const submitResult = await provider.submit({
-            segmentId: seg.id,
-            prompt: seg.prompt?.visual ?? '',
-            negative: seg.prompt?.negative,
-            aspectRatio: project.aspectRatio,
-            estimatedSeconds: seg.estimatedSeconds,
-          });
-          updateJob(db, job.id, {
-            providerJobId: submitResult.providerJobId,
-            status: 'running',
-          });
-          transitionSegmentStatus(db, seg.id, 'submitted');
-          return job;
+          try {
+            const submitResult = await provider.submit({
+              segmentId: seg.id,
+              prompt: seg.prompt?.visual ?? '',
+              negative: seg.prompt?.negative,
+              aspectRatio: project.aspectRatio,
+              estimatedSeconds: seg.estimatedSeconds,
+            });
+            updateJob(db, job.id, {
+              providerJobId: submitResult.providerJobId,
+              status: 'running',
+            });
+            transitionSegmentStatus(db, seg.id, 'submitted');
+            return job;
+          } catch (err) {
+            // 提交失败（如 429 限流）：回滚该 job/segment，不中断整批（failed 可经 regenerate 恢复）
+            const message = err instanceof Error ? err.message : String(err);
+            updateJob(db, job.id, { status: 'failed', error: message });
+            transitionSegmentStatus(db, seg.id, 'failed');
+            errors.push({ segmentId: seg.id, error: message });
+            return null;
+          }
         }),
       );
-      jobs.push(...results);
+      jobs.push(...results.filter((j): j is VideoJob => j !== null));
     }
-    res.json({ ok: true, jobs });
+    if (jobs.length === 0) {
+      res.status(502).json({
+        error: `全部分镜提交失败: ${errors[0]?.error ?? 'unknown'}`,
+        errors,
+      });
+      return;
+    }
+    res.json({ ok: true, jobs, errors });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
