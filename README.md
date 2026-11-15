@@ -1,8 +1,9 @@
 # PiVideoStudio
 
 小说转视频生成平台：将小说章节拆分为分镜，生成分镜提示词，调用视频生成 API 产出片段，配音字幕后合成为成片。
+与 PiNovelStudio（小说生成平台）独立开发，通过 B6 融合模块实现跨平台联动。
 
-与 PiNovelStudio（小说生成平台）独立开发，主项目仅保留跳转入口；融合契约见 docs/integration-contract.md。
+> 详细项目介绍见 [docs/project-overview.md](docs/project-overview.md)，融合契约见 [docs/integration-contract.md](docs/integration-contract.md)。
 
 ## 架构
 
@@ -32,7 +33,9 @@ pnpm dev:worker
 
 | 变量 | 说明 | 默认值 |
 |---|---|---|
-| `VIDEO_PROVIDER` | 视频生成供应商：mock / keling / jimeng | mock |
+| `VIDEO_PROVIDER` | 视频生成供应商：mock / keling / jimeng / minimax | mock |
+| `MINIMAX_API_KEY` | MiniMax API Key（mk- 开头） | - |
+| `MINIMAX_BASE_URL` | MiniMax API 地址 | https://metaso.cn/api/minimax |
 | `LLM_BASE_URL` | LLM API 地址 | - |
 | `LLM_API_KEY` | LLM API Key | - |
 | `LLM_MODEL` | LLM 模型名称 | - |
