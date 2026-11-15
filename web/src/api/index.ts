@@ -75,6 +75,16 @@ export interface Segment {
   };
 }
 
+export interface Asset {
+  id: string;
+  projectId: string;
+  kind: 'character' | 'scene';
+  name: string;
+  description: string;
+  referenceImagePath?: string;
+  candidateImages: string[];
+}
+
 export interface Job {
   id: string;
   projectId: string;
@@ -135,4 +145,31 @@ export const api = {
       `/api/projects/${id}/estimate`,
       { method: 'POST' },
     ),
+  extractAssets: (id: string) =>
+    request<{ ok: boolean; assets: Asset[] }>(
+      `/api/projects/${id}/extract-assets`,
+      { method: 'POST' },
+    ),
+  getAssets: (id: string) => request<Asset[]>(`/api/projects/${id}/assets`),
+  generateImages: (assetId: string) =>
+    request<{ ok: boolean; assets: Asset[] }>(
+      `/api/assets/${assetId}/generate-images`,
+      { method: 'POST' },
+    ),
+  selectImage: (assetId: string, imagePath: string) =>
+    request<{ ok: boolean; asset: Asset }>(
+      `/api/assets/${assetId}/select-image`,
+      { method: 'PUT', body: JSON.stringify({ imagePath }) },
+    ),
+  generateSample: (id: string) =>
+    request<{ ok: boolean; job: Job; segmentId: string }>(
+      `/api/projects/${id}/generate-sample`,
+      { method: 'POST' },
+    ),
+  approveSegment: (segmentId: string) =>
+    request<{ ok: boolean; segment: Segment }>(
+      `/api/segments/${segmentId}/approve`,
+      { method: 'POST' },
+    ),
+  exportSegmentsUrl: (id: string) => `/api/projects/${id}/export`,
 };

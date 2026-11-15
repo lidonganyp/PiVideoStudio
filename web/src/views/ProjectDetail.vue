@@ -6,6 +6,7 @@ import {
   type Project,
   type Segment,
   type Job,
+  type Asset,
   type CostEstimate,
   type StoryProfile,
 } from '../api';
@@ -17,7 +18,13 @@ const projectId = route.params.id as string;
 const project = ref<Project | null>(null);
 const segments = ref<Segment[]>([]);
 const jobs = ref<Job[]>([]);
+const assets = ref<Asset[]>([]);
 const estimate = ref<CostEstimate | null>(null);
+/** 正在生成候选图的资产 ID 集合 */
+const imageLoading = ref<Set<string>>(new Set());
+/** 样片确认状态 */
+const sampleSegmentId = ref('');
+const sampleReady = ref(false);
 const loading = ref(false);
 const error = ref('');
 const actionLoading = ref('');
@@ -27,14 +34,25 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 async function loadData() {
   loading.value = true;
   try {
-    const [p, segs, j] = await Promise.all([
+    const [p, segs, j, a] = await Promise.all([
       api.getProject(projectId),
       api.getSegments(projectId),
       api.getJobs(projectId),
+      api.getAssets(projectId),
     ]);
     project.value = p;
     segments.value = segs;
     jobs.value = j;
+    assets.value = a;
+    // 样片状态恢复
+    if (sampleSegmentId.value) {
+      const sample = segs.find((s) => s.id === sampleSegmentId.value);
+      sampleReady.value = sample?.status === 'succeeded';
+    } else {
+      const firstDone = segs.find((s) => s.status === 'succeeded' || s.status === 'approved');
+      if (firstDone) sampleSegmentId.value = firstDone.id;
+      sampleReady.value = Boolean(firstDone);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -99,6 +117,125 @@ const buildPrompts = () =>
 const generateSegments = () =>
   doAction('generate', () => api.generateSegments(projectId));
 const compose = () => doAction('compose', () => api.compose(projectId));
+
+/** 确认节点 1：提取资产（角色/场景卡） */
+const extractAssets = () =>
+  doAction('assets', () => api.extractAssets(projectId));
+
+/** 确认节点 2/3：为资产生成候选参考图 */
+async function generateImagesFor(assetId: string) {
+  imageLoading.value = new Set([...imageLoading.value, assetId]);
+  error.value = '';
+  try {
+    const res = await api.generateImages(assetId);
+    assets.value = res.assets;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    const next = new Set(imageLoading.value);
+    next.delete(assetId);
+    imageLoading.value = next;
+  }
+}
+
+/** 确认选定参考图 */
+async function selectImageFor(assetId: string, imagePath: string) {
+  error.value = '';
+  try {
+    await api.selectImage(assetId, imagePath);
+    const a = await api.getAssets(projectId);
+    assets.value = a;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+/** 确认节点 4：生成首个样片 */
+async function generateSample() {
+  actionLoading.value = 'sample';
+  error.value = '';
+  try {
+    await api.buildPrompts(projectId);
+    const res = await api.generateSample(projectId);
+    sampleSegmentId.value = res.segmentId;
+    sampleReady.value = false;
+    await loadData();
+    startPolling();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+/** 样片确认后批量生成剩余分镜 */
+async function confirmSampleAndGenerateAll() {
+  actionLoading.value = 'start';
+  error.value = '';
+  try {
+    await api.generateSegments(projectId);
+    await loadData();
+    startPolling();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+/** 资产确认进度 */
+const assetConfirmStats = computed(() => {
+  const list = assets.value;
+  const total = list.length;
+  const confirmed = list.filter((a) => a.referenceImagePath).length;
+  const withCandidates = list.filter(
+    (a) => !a.referenceImagePath && a.candidateImages.length > 0,
+  ).length;
+  return { total, confirmed, withCandidates, allConfirmed: total > 0 && confirmed === total };
+});
+
+/** 样片视频 URL */
+const sampleVideoUrl = computed(() => {
+  if (!sampleSegmentId.value) return '';
+  const job = jobs.value.find(
+    (j) => j.segmentId === sampleSegmentId.value && j.status === 'succeeded' && j.resultPath,
+  );
+  return job ? job.resultPath!.replace(/^.*storage\//, '/files/') : '';
+});
+
+/** 样片待确认：样片已成功且其余分镜尚未批量提交 */
+const samplePendingConfirm = computed(() => {
+  if (!sampleSegmentId.value || !sampleReady.value) return false;
+  const others = segments.value.filter((s) => s.id !== sampleSegmentId.value);
+  return (
+    others.length > 0 &&
+    others.every((s) => s.status === 'draft' || s.status === 'prompt_ready')
+  );
+});
+
+/** 导出片段包（POST 下载 zip） */
+async function exportSegments() {
+  actionLoading.value = 'export';
+  error.value = '';
+  try {
+    const resp = await fetch(api.exportSegmentsUrl(projectId), { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: resp.statusText }));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `segments-${projectId}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    actionLoading.value = '';
+  }
+}
 
 /** 一键开始：提示词 → 视频生成 */
 async function startGeneration() {
@@ -235,12 +372,88 @@ onUnmounted(stopPolling);
         <div class="est-row total"><span>合计预估</span><b>¥ {{ estimate.totalCost }}</b></div>
         <p class="hint">费率：{{ estimate.rateDetail.rate }} 元/{{ estimate.rateDetail.unit === 'seconds' ? '秒' : '次' }}</p>
       </div>
+      <!-- 确认节点 1-3：资产与参考图确认 -->
+      <div class="asset-section">
+        <h3>角色 / 场景资产确认</h3>
+        <p v-if="assets.length === 0" class="hint">
+          先提取角色与场景资产卡，为每个资产生成候选参考图并选定一张，保证全片视觉一致性。
+        </p>
+        <button
+          v-if="assets.length === 0"
+          @click="extractAssets"
+          :disabled="actionLoading === 'assets'"
+          class="btn"
+        >
+          {{ actionLoading === 'assets' ? '提取中...' : '提取角色 / 场景资产' }}
+        </button>
+        <template v-else>
+          <p class="hint">
+            参考图确认进度：{{ assetConfirmStats.confirmed }}/{{ assetConfirmStats.total }}
+            <span v-if="assetConfirmStats.allConfirmed">· 全部确认 ✓</span>
+          </p>
+          <div v-for="asset in assets" :key="asset.id" class="asset-card">
+            <div class="asset-head">
+              <span :class="['asset-kind', asset.kind]">
+                {{ asset.kind === 'character' ? '角色' : '场景' }}
+              </span>
+              <strong>{{ asset.name }}</strong>
+              <span v-if="asset.referenceImagePath" class="asset-done">已确认 ✓</span>
+            </div>
+            <p class="asset-desc">{{ asset.description }}</p>
+            <div v-if="asset.referenceImagePath" class="candidate-grid">
+              <img
+                :src="asset.referenceImagePath.replace(/^.*storage\//, '/files/')"
+                :alt="asset.name"
+                class="asset-img selected"
+              />
+            </div>
+            <template v-else>
+              <button
+                v-if="asset.candidateImages.length === 0"
+                @click="generateImagesFor(asset.id)"
+                :disabled="imageLoading.has(asset.id)"
+                class="btn small"
+              >
+                {{ imageLoading.has(asset.id) ? '生成中...' : '生成候选参考图' }}
+              </button>
+              <div v-else class="candidate-grid">
+                <img
+                  v-for="(img, i) in asset.candidateImages"
+                  :key="img"
+                  :src="img.replace(/^.*storage\//, '/files/')"
+                  :alt="`${asset.name} 候选 ${i + 1}`"
+                  class="asset-img candidate"
+                  @click="selectImageFor(asset.id, img)"
+                />
+                <button
+                  @click="generateImagesFor(asset.id)"
+                  :disabled="imageLoading.has(asset.id)"
+                  class="btn small"
+                >
+                  {{ imageLoading.has(asset.id) ? '生成中...' : '重新生成' }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
       <div class="btn-row">
         <button v-if="!estimate" @click="loadEstimate" :disabled="actionLoading === 'estimate'" class="btn">
           {{ actionLoading === 'estimate' ? '计算中...' : '重新计算预估' }}
         </button>
-        <button @click="startGeneration" :disabled="actionLoading === 'start'" class="btn primary">
-          {{ actionLoading === 'start' ? '启动中...' : '确认，开始生成' }}
+        <button
+          @click="generateSample"
+          :disabled="actionLoading === 'sample' || !assetConfirmStats.allConfirmed"
+          class="btn primary"
+        >
+          {{ actionLoading === 'sample' ? '样片生成中...' : '生成首个样片（确认效果）' }}
+        </button>
+        <button
+          @click="startGeneration"
+          :disabled="actionLoading === 'start' || !assetConfirmStats.allConfirmed"
+          class="btn"
+        >
+          {{ actionLoading === 'start' ? '启动中...' : '跳过样片，直接生成全部' }}
         </button>
       </div>
     </section>
@@ -248,6 +461,21 @@ onUnmounted(stopPolling);
     <!-- Step 4: 任务看板 -->
     <section v-if="step === 'dashboard'" class="card">
       <h2>生成进度</h2>
+      <!-- 确认节点 4：样片确认 -->
+      <div v-if="samplePendingConfirm" class="sample-confirm">
+        <h3>样片确认</h3>
+        <p class="hint">请确认首个样片效果，满意后再批量生成剩余分镜，避免整片返工。</p>
+        <video v-if="sampleVideoUrl" :src="sampleVideoUrl" controls class="video-player sample"></video>
+        <div class="btn-row">
+          <button
+            @click="confirmSampleAndGenerateAll"
+            :disabled="actionLoading === 'start'"
+            class="btn primary"
+          >
+            {{ actionLoading === 'start' ? '提交中...' : '确认样片，批量生成剩余分镜' }}
+          </button>
+        </div>
+      </div>
       <div class="progress-bar">
         <div class="progress-fill" :style="{ width: progressStats.percent + '%' }"></div>
       </div>
@@ -280,6 +508,13 @@ onUnmounted(stopPolling);
           class="btn primary"
         >
           {{ actionLoading === 'compose' ? '合成中...' : '导出成片（本地合成）' }}
+        </button>
+        <button
+          @click="exportSegments"
+          :disabled="actionLoading === 'export' || progressStats.succeeded === 0"
+          class="btn"
+        >
+          {{ actionLoading === 'export' ? '打包中...' : '导出片段包（zip）' }}
         </button>
       </div>
     </section>
@@ -571,5 +806,86 @@ onUnmounted(stopPolling);
   width: 100%;
   max-height: 480px;
   border-radius: 8px;
+}
+.video-player.sample {
+  max-height: 360px;
+  margin-bottom: 8px;
+}
+.asset-section {
+  margin-top: 16px;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 12px;
+}
+.asset-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.asset-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.asset-kind {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.asset-kind.character {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+.asset-kind.scene {
+  background: #d1fae5;
+  color: #065f46;
+}
+.asset-done {
+  margin-left: auto;
+  font-size: 12px;
+  color: #059669;
+}
+.asset-desc {
+  margin: 6px 0;
+  font-size: 13px;
+  color: #4b5563;
+}
+.candidate-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+.asset-img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 2px solid transparent;
+}
+.asset-img.candidate {
+  cursor: pointer;
+  border-color: #e5e7eb;
+}
+.asset-img.candidate:hover {
+  border-color: #2563eb;
+}
+.asset-img.selected {
+  border-color: #059669;
+}
+.btn.small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.sample-confirm {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.sample-confirm h3 {
+  margin: 0 0 4px;
 }
 </style>
