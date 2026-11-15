@@ -3,13 +3,16 @@ import { callLLMAsJSON } from '../llm/gateway';
 import { getProject, transitionProjectStatus, replaceProjectSegments } from '../store';
 import type { CreateSegmentInput } from '../store';
 
-/** LLM 返回的单个分镜结构 */
+/** LLM 返回的单个分镜结构（N2 场景切片） */
 interface LLMScene {
   sourceText: string;
   sceneSummary: string;
   characterNames: string[];
   emotion: string;
   estimatedSeconds: number;
+  event: string;
+  characterState: string;
+  nextSceneHint: string;
 }
 
 const SYSTEM_PROMPT = `你是一个专业的小说转视频分镜师。你的任务是将小说章节文本拆分为连续的视频分镜。
@@ -23,7 +26,10 @@ const SYSTEM_PROMPT = `你是一个专业的小说转视频分镜师。你的任
 6. emotion 用一个词概括该分镜的情绪基调（如：紧张、温馨、悲伤、激昂、平静）
 7. estimatedSeconds 按旁白字数除以 4.5 估算，范围 3~10
 
-输出格式：JSON 对象，包含 segments 数组，每项含 sourceText、sceneSummary、characterNames、emotion、estimatedSeconds。`;
+8. event 用一句话概括该切片发生的核心动作（15 字以内）
+9. characterState 描述主要人物在本切片的状态（情绪/动作/位置，20 字以内；无人时为空字符串）
+10. nextSceneHint 描述与下一个切片的衔接点（场景/视线/动作延续，20 字以内；最后一个切片为空字符串）
+输出格式：JSON 对象，包含 segments 数组，每项含 sourceText、sceneSummary、characterNames、emotion、estimatedSeconds、event、characterState、nextSceneHint。`;
 
 /**
  * 文本拆分：将章节文本拆分为分镜列表，写入 video_segments。
@@ -63,6 +69,9 @@ export async function splitText(db: DatabaseSync, projectId: string): Promise<vo
       characterNames: Array.isArray(seg.characterNames) ? seg.characterNames : [],
       emotion: seg.emotion ?? '平静',
       estimatedSeconds: Math.max(3, Math.min(10, Number(seg.estimatedSeconds) || 5)),
+      event: seg.event ?? seg.sceneSummary ?? '',
+      characterState: seg.characterState ?? '',
+      nextSceneHint: seg.nextSceneHint ?? '',
     }));
 
     replaceProjectSegments(db, projectId, inputs);

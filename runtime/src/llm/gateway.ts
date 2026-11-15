@@ -91,16 +91,23 @@ function mockSegments(text: string) {
     characterNames: string[];
     emotion: string;
     estimatedSeconds: number;
+    event: string;
+    characterState: string;
+    nextSceneHint: string;
   }> = [];
   for (let i = 0; i < sentences.length; i += 2) {
     const group = sentences.slice(i, i + 2).join('');
     const names = extractNames(group);
+    const isLast = i + 2 >= sentences.length;
     segments.push({
       sourceText: group,
       sceneSummary: group.length > 20 ? group.slice(0, 20) + '…' : group,
       characterNames: names,
       emotion: '平静',
       estimatedSeconds: Math.max(3, Math.min(10, Math.round(group.length / 4.5))),
+      event: group.slice(0, 15),
+      characterState: names.length > 0 ? `${names[0]}状态平稳（mock）` : '',
+      nextSceneHint: isLast ? '' : '场景延续（mock）',
     });
   }
   return { segments };

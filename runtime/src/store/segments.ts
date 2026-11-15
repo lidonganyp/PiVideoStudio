@@ -12,6 +12,9 @@ interface SegmentRow {
   character_names: string;
   emotion: string;
   estimated_seconds: number;
+  event: string;
+  character_state: string;
+  next_scene_hint: string;
   status: string;
   current_version: number;
   prompt_bundle: string | null;
@@ -27,6 +30,9 @@ function rowToSegment(row: SegmentRow): Segment {
     characterNames: JSON.parse(row.character_names) as string[],
     emotion: row.emotion,
     estimatedSeconds: row.estimated_seconds,
+    event: row.event ?? '',
+    characterState: row.character_state ?? '',
+    nextSceneHint: row.next_scene_hint ?? '',
     status: row.status as SegmentStatus,
     currentVersion: row.current_version,
     prompt: row.prompt_bundle
@@ -43,6 +49,9 @@ export interface CreateSegmentInput {
   characterNames: string[];
   emotion: string;
   estimatedSeconds: number;
+  event?: string;
+  characterState?: string;
+  nextSceneHint?: string;
 }
 
 export function createSegment(db: DatabaseSync, input: CreateSegmentInput): Segment {
@@ -55,14 +64,19 @@ export function createSegment(db: DatabaseSync, input: CreateSegmentInput): Segm
     characterNames: input.characterNames,
     emotion: input.emotion,
     estimatedSeconds: input.estimatedSeconds,
+    event: input.event ?? '',
+    characterState: input.characterState ?? '',
+    nextSceneHint: input.nextSceneHint ?? '',
     status: 'draft',
     currentVersion: 1,
   };
   db.prepare(
     `INSERT INTO video_segments
        (id, project_id, seq_order, source_text, scene_summary,
-        character_names, emotion, estimated_seconds, status, current_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        character_names, emotion, estimated_seconds,
+        event, character_state, next_scene_hint,
+        status, current_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     segment.id,
     segment.projectId,
@@ -72,6 +86,9 @@ export function createSegment(db: DatabaseSync, input: CreateSegmentInput): Segm
     JSON.stringify(segment.characterNames),
     segment.emotion,
     segment.estimatedSeconds,
+    segment.event,
+    segment.characterState,
+    segment.nextSceneHint,
     segment.status,
     segment.currentVersion,
   );
@@ -115,6 +132,9 @@ export interface UpdateSegmentFields {
   characterNames?: string[];
   emotion?: string;
   estimatedSeconds?: number;
+  event?: string;
+  characterState?: string;
+  nextSceneHint?: string;
   prompt?: PromptBundle;
 }
 
@@ -129,13 +149,17 @@ export function updateSegment(
   db.prepare(
     `UPDATE video_segments
        SET scene_summary = ?, character_names = ?, emotion = ?,
-           estimated_seconds = ?, prompt_bundle = ?
+           estimated_seconds = ?, event = ?, character_state = ?,
+           next_scene_hint = ?, prompt_bundle = ?
      WHERE id = ?`,
   ).run(
     next.sceneSummary,
     JSON.stringify(next.characterNames),
     next.emotion,
     next.estimatedSeconds,
+    next.event,
+    next.characterState,
+    next.nextSceneHint,
     next.prompt ? JSON.stringify(next.prompt) : null,
     id,
   );

@@ -50,6 +50,12 @@ export interface Segment {
   characterNames: string[];
   emotion: string;
   estimatedSeconds: number;
+  /** 事件：该切片发生的核心动作（一句话） */
+  event: string;
+  /** 人物状态：主要人物在本切片的状态（情绪/动作/位置） */
+  characterState: string;
+  /** 下一场景钩子：与下一个切片的衔接点（场景/视线/动作延续） */
+  nextSceneHint: string;
   status: SegmentStatus;
   currentVersion: number;
   prompt?: PromptBundle;

@@ -98,4 +98,20 @@ export function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_video_jobs_project ON video_jobs(project_id);
     CREATE INDEX IF NOT EXISTS idx_video_jobs_status ON video_jobs(status);
   `);
+
+  // 幂等列迁移：场景切片扩展字段（event/character_state/next_scene_hint）
+  const segmentColumns = db
+    .prepare("PRAGMA table_info(video_segments)")
+    .all() as Array<{ name: string }>;
+  const existing = new Set(segmentColumns.map((c) => c.name));
+  const additions: Array<[string, string]> = [
+    ['event', "TEXT NOT NULL DEFAULT ''"],
+    ['character_state', "TEXT NOT NULL DEFAULT ''"],
+    ['next_scene_hint', "TEXT NOT NULL DEFAULT ''"],
+  ];
+  for (const [column, ddl] of additions) {
+    if (!existing.has(column)) {
+      db.exec(`ALTER TABLE video_segments ADD COLUMN ${column} ${ddl}`);
+    }
+  }
 }
