@@ -1,19 +1,36 @@
 /**
  * PiNovelStudio 对接适配器。
- * - 从主项目 API 拉取章节文本（替换粘贴模式）
- * - 鉴权打通（token 透传）
+ * - 从 PiNovelStudio API 拉取项目与章节（替换粘贴模式）
+ * - 鉴权打通（JWT 代理登录 / token 透传）
  * - budget ledger 对接
  *
  * 配置走环境变量：
- *   NOVEL_STUDIO_BASE_URL  — 主项目 API base URL
+ *   NOVEL_STUDIO_BASE_URL  — PiNovelStudio API base URL（含 /api 前缀）
  *   NOVEL_STUDIO_TOKEN     — 鉴权 token（或从请求头透传）
+ *
+ * PiNovelStudio 实际路由（NestJS，全局前缀 /api，JWT Bearer 鉴权）：
+ *   POST /api/auth/login                 — 登录，返回 { accessToken, user }
+ *   GET  /api/projects?page=&pageSize=  — 项目列表（分页 { items, total, page, pageSize }）
+ *   GET  /api/projects/:id/chapters     — 章节列表（数组，含正文 content）
+ *   GET  /api/projects/:id/chapters/:cid — 章节详情
  */
 
+export interface NovelProject {
+  id: number;
+  title: string;
+  chapterCount?: number;
+  updatedAt?: string;
+}
+
 export interface NovelChapter {
-  id: string;
+  id: number;
+  projectId: number;
+  chapterNumber: number;
   title: string;
   content: string;
-  projectId: string;
+  wordCount: number;
+  status: string;
+  version: number;
 }
 
 function getBaseUrl(): string {
@@ -35,32 +52,70 @@ function getAuthHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
+/** 代理登录 PiNovelStudio，返回 accessToken。 */
+export async function loginNovelStudio(
+  email: string,
+  password: string,
+): Promise<{ accessToken: string; user?: unknown }> {
+  const url = `${getBaseUrl()}/auth/login`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`PiNovelStudio 登录失败: HTTP ${resp.status} ${errText.slice(0, 200)}`);
+  }
+  return (await resp.json()) as { accessToken: string; user?: unknown };
+}
+
+/** 拉取 PiNovelStudio 项目列表（分页）。 */
+export async function listNovelProjects(
+  page = 1,
+  pageSize = 50,
+  token?: string,
+): Promise<{ items: NovelProject[]; total: number; page: number; pageSize: number }> {
+  const url = `${getBaseUrl()}/projects?page=${page}&pageSize=${pageSize}`;
+  const resp = await fetch(url, { headers: getAuthHeaders(token) });
+  if (!resp.ok) {
+    throw new Error(`拉取小说项目失败: HTTP ${resp.status}`);
+  }
+  return (await resp.json()) as {
+    items: NovelProject[];
+    total: number;
+    page: number;
+    pageSize: number;
+  };
+}
+
 /**
- * 从 PiNovelStudio 拉取章节列表。
+ * 从 PiNovelStudio 拉取章节列表（含正文 content）。
  */
 export async function fetchChapters(
-  novelProjectId: string,
+  novelProjectId: number | string,
   token?: string,
 ): Promise<NovelChapter[]> {
-  const url = `${getBaseUrl()}/api/novels/${novelProjectId}/chapters`;
+  const url = `${getBaseUrl()}/projects/${novelProjectId}/chapters`;
   const resp = await fetch(url, {
     headers: getAuthHeaders(token),
   });
   if (!resp.ok) {
     throw new Error(`拉取章节失败: HTTP ${resp.status}`);
   }
-  const data = (await resp.json()) as { chapters?: NovelChapter[] };
-  return data.chapters ?? [];
+  const data = (await resp.json()) as NovelChapter[] | { chapters?: NovelChapter[] };
+  return Array.isArray(data) ? data : (data.chapters ?? []);
 }
 
 /**
  * 从 PiNovelStudio 拉取单个章节内容。
  */
 export async function fetchChapter(
-  chapterId: string,
+  novelProjectId: number | string,
+  chapterId: number | string,
   token?: string,
 ): Promise<NovelChapter> {
-  const url = `${getBaseUrl()}/api/chapters/${chapterId}`;
+  const url = `${getBaseUrl()}/projects/${novelProjectId}/chapters/${chapterId}`;
   const resp = await fetch(url, {
     headers: getAuthHeaders(token),
   });
@@ -82,7 +137,7 @@ export async function syncBudgetLedger(
   },
   token?: string,
 ): Promise<void> {
-  const url = `${getBaseUrl()}/api/novels/${novelProjectId}/budget`;
+  const url = `${getBaseUrl()}/novels/${novelProjectId}/budget`;
   const resp = await fetch(url, {
     method: 'POST',
     headers: getAuthHeaders(token),

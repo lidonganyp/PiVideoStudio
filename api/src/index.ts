@@ -43,6 +43,9 @@ import {
   analyzeStory,
   estimateProjectCost,
   getVideoProviderName,
+  loginNovelStudio,
+  listNovelProjects,
+  fetchChapters,
   STORAGE_DIR,
   type CreateProjectInput,
 } from '@pivideo/runtime';
@@ -563,6 +566,52 @@ app.post('/api/projects/:id/compose', (req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
+  }
+});
+
+// ---- PiNovelStudio 章节来源代理（B5）----
+// 鉴权 token 从请求头 Authorization: Bearer <token> 透传到 PiNovelStudio
+
+app.post('/api/pinovel/login', async (req, res) => {
+  try {
+    const { email, password } = req.body ?? {};
+    if (!email || !password) {
+      res.status(400).json({ error: 'email and password are required' });
+      return;
+    }
+    const result = await loginNovelStudio(String(email), String(password));
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.get('/api/pinovel/projects', async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const token =
+      typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : undefined;
+    const page = Number(req.query.page ?? 1);
+    const pageSize = Number(req.query.pageSize ?? 50);
+    const result = await listNovelProjects(page, pageSize, token);
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.get('/api/pinovel/projects/:id/chapters', async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const token =
+      typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : undefined;
+    const chapters = await fetchChapters(req.params.id, token);
+    res.json(chapters);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: message });
   }
 });
 

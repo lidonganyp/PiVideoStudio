@@ -108,6 +108,7 @@ export const api = {
     style?: string;
     aspectRatio?: string;
     rawText?: string;
+    chapterIds?: string[];
   }) =>
     request<Project>('/api/projects', {
       method: 'POST',
@@ -172,4 +173,40 @@ export const api = {
       { method: 'POST' },
     ),
   exportSegmentsUrl: (id: string) => `/api/projects/${id}/export`,
+};
+
+export interface NovelProject {
+  id: number;
+  title: string;
+  chapterCount?: number;
+  updatedAt?: string;
+}
+
+export interface NovelChapter {
+  id: number;
+  projectId: number;
+  chapterNumber: number;
+  title: string;
+  content: string;
+  wordCount: number;
+  status: string;
+  version: number;
+}
+
+/** PiNovelStudio 章节来源（经 PiVideoStudio API 代理） */
+export const pinovelApi = {
+  login: (email: string, password: string) =>
+    request<{ accessToken: string; user?: unknown }>('/api/pinovel/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  listProjects: (token: string, page = 1, pageSize = 50) =>
+    request<{ items: NovelProject[]; total: number; page: number; pageSize: number }>(
+      `/api/pinovel/projects?page=${page}&pageSize=${pageSize}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    ),
+  listChapters: (token: string, projectId: number | string) =>
+    request<NovelChapter[]>(`/api/pinovel/projects/${projectId}/chapters`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
 };
