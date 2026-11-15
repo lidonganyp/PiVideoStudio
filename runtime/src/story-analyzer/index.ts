@@ -6,6 +6,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { callLLMAsJSON } from '../llm/gateway';
 import { getProject, updateProject } from '../store';
+import type { VideoProject } from '../types';
 
 /** 故事档案：全片级上下文 */
 export interface StoryProfile {
@@ -51,6 +52,43 @@ const SYSTEM_PROMPT = `你是一个专业的小说文本分析师。你的任务
 3. 所有字段必填，无人物时 characters 为空数组`;
 
 /**
+ * 把 PiNovelStudio 推送的结构化上下文（大纲/人物卡/种子）格式化为 prompt 文本块。
+ * 无上下文时返回空字符串（保持原有行为）。
+ */
+function buildContextBlock(ctx: VideoProject['novelSource']['novelContext']): string {
+  if (!ctx) return '';
+  const parts: string[] = [];
+  if (ctx.outline && ctx.outline.length > 0) {
+    const lines = ctx.outline
+      .map((n) => `- ${n.title}${n.summary ? `：${n.summary}` : ''}`)
+      .join('\n');
+    parts.push(`【原作大纲】\n${lines}`);
+  }
+  if (ctx.characters && ctx.characters.length > 0) {
+    const lines = ctx.characters
+      .map(
+        (c) =>
+          `- ${c.name}（${c.roleType || '角色'}）${c.identity ? `：${c.identity}` : ''}${c.personality ? `；性格：${c.personality}` : ''}${c.relationships ? `；关系：${c.relationships}` : ''}`,
+      )
+      .join('\n');
+    parts.push(
+      `【原作人物卡（优先采用，visualAnchor 需基于这些设定具体化，不要凭空想象）】\n${lines}`,
+    );
+  }
+  if (ctx.seed && (ctx.seed.intent || ctx.seed.mustInclude || ctx.seed.endingGoal)) {
+    const seedLines = [
+      ctx.seed.intent ? `- 本章意图：${ctx.seed.intent}` : '',
+      ctx.seed.mustInclude ? `- 必须包含：${ctx.seed.mustInclude}` : '',
+      ctx.seed.endingGoal ? `- 结局目标：${ctx.seed.endingGoal}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    parts.push(`【章节种子】\n${seedLines}`);
+  }
+  return parts.length > 0 ? `${parts.join('\n\n')}\n\n` : '';
+}
+
+/**
  * 文本解析：生成 story profile 并写入项目 novel_source.storyProfile。
  * 不流转项目状态（解析是 planning 状态下的准备工作）。
  */
@@ -67,9 +105,10 @@ export async function analyzeStory(
     throw new Error('项目没有小说文本（novelSource.rawText 为空）');
   }
 
+  const contextBlock = buildContextBlock(project.novelSource.novelContext);
   const profile = await callLLMAsJSON<StoryProfile>({
     system: SYSTEM_PROMPT,
-    user: `请分析以下小说文本，输出故事档案：\n\n${rawText}`,
+    user: `${contextBlock}请分析以下小说文本，输出故事档案：\n\n${rawText}`,
     temperature: 0.3,
   });
 

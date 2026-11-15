@@ -8,7 +8,7 @@ import {
   listAssetsByProject,
   deleteAsset,
 } from '../store';
-import type { AssetKind } from '../types';
+import type { AssetKind, VideoProject } from '../types';
 
 interface LLMCharacterCard {
   name: string;
@@ -51,6 +51,34 @@ const SYSTEM_PROMPT = `你是一个专业的小说资产提取器。你的任务
 输出格式：JSON 对象，包含 characters 数组和 scenes 数组。`;
 
 /**
+ * 把 PiNovelStudio 推送的结构化上下文格式化为 prompt 文本块。
+ */
+function buildContextBlock(
+  ctx: VideoProject['novelSource']['novelContext'],
+): string {
+  if (!ctx) return '';
+  const parts: string[] = [];
+  if (ctx.characters && ctx.characters.length > 0) {
+    const lines = ctx.characters
+      .map(
+        (c) =>
+          `- ${c.name}（${c.roleType || '角色'}）${c.identity ? `：${c.identity}` : ''}${c.personality ? `；性格：${c.personality}` : ''}`,
+      )
+      .join('\n');
+    parts.push(
+      `【原作人物卡（外貌/服装描述需基于这些设定具体化，不要凭空想象）】\n${lines}`,
+    );
+  }
+  if (ctx.outline && ctx.outline.length > 0) {
+    const lines = ctx.outline
+      .map((n) => `- ${n.title}${n.summary ? `：${n.summary}` : ''}`)
+      .join('\n');
+    parts.push(`【原作大纲】\n${lines}`);
+  }
+  return parts.length > 0 ? `${parts.join('\n\n')}\n\n` : '';
+}
+
+/**
  * 资产提取：从章节文本提取角色卡与场景卡，写入 video_assets。
  * 项目状态：planning → asset_extracting → planning（完成后回到可审阅状态）。
  */
@@ -72,9 +100,10 @@ export async function extractAssets(
   transitionProjectStatus(db, projectId, 'asset_extracting');
 
   try {
+    const contextBlock = buildContextBlock(project.novelSource.novelContext);
     const result = await callLLMAsJSON<LLMAssetResult>({
       system: SYSTEM_PROMPT,
-      user: `请从以下小说文本中提取角色卡和场景卡：\n\n${rawText}`,
+      user: `${contextBlock}请从以下小说文本中提取角色卡和场景卡：\n\n${rawText}`,
       temperature: 0.3,
     });
 

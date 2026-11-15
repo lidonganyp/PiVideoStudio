@@ -67,14 +67,18 @@ app.get('/api/projects', (_req, res) => {
 });
 
 app.post('/api/projects', (req, res) => {
-  const { title, style, aspectRatio, chapterIds, rawText } = req.body ?? {};
+  const { title, style, aspectRatio, chapterIds, rawText, novelContext } = req.body ?? {};
   if (!title) {
     res.status(400).json({ error: 'title is required' });
     return;
   }
   const input: CreateProjectInput = {
     title,
-    novelSource: { chapterIds: chapterIds ?? [], rawText },
+    novelSource: {
+      chapterIds: chapterIds ?? [],
+      rawText,
+      ...(novelContext ? { novelContext } : {}),
+    },
     style: (style ?? 'narration') as StyleTemplate,
     aspectRatio: (aspectRatio ?? '9:16') as AspectRatio,
   };

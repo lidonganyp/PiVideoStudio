@@ -31,6 +31,37 @@ export type SegmentStatus =
   | 'approved'
   | 'rejected';
 
+/** PiNovelStudio 推送的人物卡（原作设定，N1/N4 优先采用） */
+export interface NovelContextCharacter {
+  name: string;
+  roleType?: string;
+  identity?: string;
+  personality?: string;
+  relationships?: string;
+  notes?: string;
+}
+
+/** PiNovelStudio 推送的大纲节点 */
+export interface NovelContextOutlineNode {
+  title: string;
+  summary?: string;
+  nodeType?: string;
+}
+
+/** PiNovelStudio 推送的结构化上下文（章节发起视频生成时携带） */
+export interface NovelContext {
+  source: 'pinovelstudio';
+  novelProjectId?: number;
+  novelProjectTitle?: string;
+  outline?: NovelContextOutlineNode[];
+  characters?: NovelContextCharacter[];
+  seed?: {
+    intent?: string;
+    mustInclude?: string;
+    endingGoal?: string;
+  };
+}
+
 export interface VideoProject {
   id: string;
   title: string;
@@ -40,6 +71,8 @@ export interface VideoProject {
     rawText?: string;
     /** N1 文本解析产出的全片级故事档案 */
     storyProfile?: StoryProfile;
+    /** PiNovelStudio 推送的结构化上下文（B6） */
+    novelContext?: NovelContext;
   };
   style: StyleTemplate;
   aspectRatio: AspectRatio;
