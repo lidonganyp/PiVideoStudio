@@ -228,6 +228,90 @@ PiVideoStudio 是小说转视频生成平台，独立于 PiNovelStudio 开发，
 
 ## 6. 验收记录
 
+### T-01 持久化层与数据表 — 验收记录
+- **commit**: `4305f04` 及后续
+- **文件**: `runtime/src/store/`（db/assets/jobs/projects/segments 五张表）
+- **验证**: `pnpm -r typecheck` 全绿；API 启动自动建表，重启后数据可查询（清理前库内含 12 个测试项目 41 个分镜，重启服务后仍可读取）
+- **结果**: ✅ 通过
+
+### T-02 LLM 网关 — 验收记录
+- **commit**: `08cf80c` 及后续
+- **文件**: `runtime/src/llm/gateway.ts`
+- **验证**: typecheck 全绿；项目『真实LLM切片测试』『真实LLM切片测试v2』使用真实 LLM 完成拆分，产出结构化分镜
+- **结果**: ✅ 通过
+
+### T-03 文本拆分器 — 验收记录
+- **commit**: `6a80dd1`
+- **文件**: `runtime/src/splitter/`，API `POST /api/projects/:id/split`
+- **验证**: 真实小说文本拆分产出 4~9 个结构化分镜，字段齐全（sourceText/sceneSummary/characterNames/emotion/estimatedSeconds）
+- **结果**: ✅ 通过
+
+### T-04 提示词构建器 — 验收记录
+- **commit**: `cbb78b9`
+- **文件**: `runtime/src/prompt-builder/` + 三套模板文件
+- **验证**: 分镜批量生成 PromptBundle，状态流转 draft → prompt_ready；分镜场景切片模型后续扩展 event/characterState/nextSceneHint（commit `b644857`）
+- **结果**: ✅ 通过
+
+### T-05 视频 Provider 网关 — 验收记录
+- **commit**: `3c59e62`
+- **文件**: `runtime/src/providers/index.ts`
+- **验证**: MockProvider 与 MiniMaxProvider 均完成 submit/query 全流程；MiniMax 真实提交成功返回 providerJobId（commit `13d540f` 修复响应解析）
+- **结果**: ✅ 通过
+
+### T-06 片段生成任务调度 — 验收记录
+- **commit**: `9966bf2`
+- **文件**: API 批量提交 + worker 轮询下载 + 失败重试
+- **验证**: 多个测试项目 4 分镜批量生成到达 succeeded/approved；429 限流卡死问题已修复（commit `eaf7073`：提交失败回滚 + 批量逐个容错 + failed 分镜可重提）
+- **结果**: ✅ 通过
+
+### T-07 ffmpeg 合成器 — 验收记录
+- **commit**: `0302222`
+- **文件**: `worker/src/composer.ts`
+- **验证**: 合成链路存储路径与任务重复问题已修复（commit `9393238`）；2026-11-16 补充：宿主机安装 ffmpeg 7.0.2 静态构建，concat 合成实测输出 4.0s 成片，ffprobe 校验通过
+- **结果**: ✅ 通过
+
+### T-08 交付接口 — 验收记录
+- **commit**: `9e317c0`
+- **文件**: API 静态路由 `/files/*`（含路径穿越防护）+ 项目详情返回 finalVideoUrl
+- **验证**: typecheck 全绿；路由注册于 api/src/index.ts:654
+- **结果**: ✅ 通过
+
+### T-09 web 最小工作台 — 验收记录
+- **commit**: `205aafe`
+- **文件**: `web/src/views/ProjectList.vue` + `ProjectDetail.vue` + vue-router
+- **验证**: `pnpm --filter @pivideo/web build` 构建通过；后续升级为向导式界面（commit `f23b403`）与确认节点 UI（commit `057c488`）
+- **结果**: ✅ 通过
+
+### T-10 资产提取器 — 验收记录
+- **commit**: `3108e72`
+- **验证**: LLM 提取角色卡+场景卡写入 video_assets，API extract-assets/assets 路由可用
+- **结果**: ✅ 通过
+
+### T-11 参考图生成 + 图生视频 — 验收记录
+- **commit**: `6cdda1c`
+- **验证**: ImageProvider 接口 + i2v 扩展就绪；2026-11-16 补充：MockImageProvider 改为无状态实现（commit `a26a6e0`），修复跨进程/重启后 mock image job not found
+- **结果**: ✅ 通过
+
+### T-12 片段审核与单片段重生成 — 验收记录
+- **commit**: `655198f`
+- **验证**: approve/reject/regenerate 路由可用，版本化回滚，compose 门禁改为 approved
+- **结果**: ✅ 通过
+
+### T-13 配音与字幕 — 验收记录
+- **commit**: `3ad82a2`
+- **验证**: edge-tts 旁白生成 + ffprobe 时长反写时间轴 + SRT 字幕生成逻辑就绪
+- **结果**: ✅ 通过
+
+### T-14 合成器完整版 — 验收记录
+- **commit**: `8247e25`
+- **验证**: 转场/旁白音轨/背景音乐 ducking/字幕烧录/封面截取逻辑就绪；ffmpeg 依赖已于 2026-11-16 在宿主机安装验证
+- **结果**: ✅ 通过
+
+### T-15 风格模板库 — 验收记录
+- **commit**: `dde6c3c`
+- **验证**: 三套模板（narration/motion-comic/commentary）含转场配置与配乐基调
+- **结果**: ✅ 通过
+
 ### T-16 多供应商路由 — 验收记录
 - **commit**: `ebe66e2`
 - **文件**: `runtime/src/providers/index.ts`（81 行）
