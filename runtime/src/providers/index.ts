@@ -242,14 +242,14 @@ const MOCK_IMAGES = [
 export class MockImageProvider implements ImageProvider {
   name = 'mock-image';
 
-  private jobs = new Map<string, { images: ImageResult[]; createdAt: number }>();
+  /**
+   * 无状态实现：不依赖进程内 Map，保证 API 进程 submit 的任务
+   * 在 worker 进程 query 时同样可见（跨进程共享数据库，但 Map 不共享）。
+   * 延迟判断基于 jobId 内嵌的时间戳，而非进程内存。
+   */
 
   async submit(job: ImageSubmitInput): Promise<{ providerJobId: string }> {
     const providerJobId = `mock-img-${job.assetId}-${Date.now()}`;
-    this.jobs.set(providerJobId, {
-      images: MOCK_IMAGES.map((url) => ({ imageUrl: url })),
-      createdAt: Date.now(),
-    });
     console.log(
       `[mock-image-provider] submit assetId=${job.assetId} providerJobId=${providerJobId}`,
     );
@@ -261,15 +261,17 @@ export class MockImageProvider implements ImageProvider {
     images?: ImageResult[];
     error?: string;
   }> {
-    const job = this.jobs.get(providerJobId);
-    if (!job) {
-      return { status: 'failed', error: `mock image job not found: ${providerJobId}` };
-    }
-    const elapsed = Date.now() - job.createdAt;
+    // 从 jobId 末尾解析提交时间戳，模拟 2 秒处理延迟
+    const match = providerJobId.match(/-(\d+)$/);
+    const createdAt = match ? Number(match[1]) : 0;
+    const elapsed = Date.now() - createdAt;
     if (elapsed < 2000) {
       return { status: 'running' };
     }
-    return { status: 'succeeded', images: job.images };
+    return {
+      status: 'succeeded',
+      images: MOCK_IMAGES.map((url) => ({ imageUrl: url })),
+    };
   }
 }
 
