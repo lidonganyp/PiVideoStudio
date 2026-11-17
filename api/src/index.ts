@@ -512,12 +512,25 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
             provider: provider.name,
           });
           try {
+            const prompt = seg.prompt?.visual ?? '';
+            const qualitySuffix = seg.prompt?.globalQualitySuffix ?? '';
+            const fullPrompt = qualitySuffix ? `${prompt} ${qualitySuffix}` : prompt;
+            // 查找角色参考图：优先匹配角色名
+            const charAssets = listAssetsByProject(db, projectId, 'character');
+            let referenceImagePath: string | undefined;
+            if (seg.characterNames.length > 0) {
+              const matched = charAssets.find((a) =>
+                seg.characterNames.includes(a.name),
+              );
+              referenceImagePath = matched?.referenceImagePath;
+            }
             const submitResult = await provider.submit({
               segmentId: seg.id,
-              prompt: seg.prompt?.visual ?? '',
+              prompt: fullPrompt,
               negative: seg.prompt?.negative,
               aspectRatio: project.aspectRatio,
               estimatedSeconds: seg.estimatedSeconds,
+              referenceImagePath,
             });
             updateJob(db, job.id, {
               providerJobId: submitResult.providerJobId,

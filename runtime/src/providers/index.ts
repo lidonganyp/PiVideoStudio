@@ -107,9 +107,17 @@ export class MiniMaxProvider implements VideoProvider {
 
   async submit(job: SubmitJobInput): Promise<SubmitResult> {
     const url = `${this.baseUrl}/v2/video_generation`;
+    const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+    if (job.referenceImagePath) {
+      const imageUrl = job.referenceImagePath.startsWith('http')
+        ? job.referenceImagePath
+        : `${process.env.PIVIDEO_WEB_URL ?? 'http://localhost:5173'}/files/${job.referenceImagePath.replace(/^storage\//, '')}`;
+      content.push({ type: 'image_url', image_url: { url: imageUrl } });
+    }
+    content.push({ type: 'text', text: job.prompt });
     const body = {
       model: this.model,
-      content: [{ type: 'text', text: job.prompt }],
+      content,
       resolution: this.resolution,
       duration: Math.min(Math.max(job.estimatedSeconds, 5), 15),
       ratio: this.ratio,
