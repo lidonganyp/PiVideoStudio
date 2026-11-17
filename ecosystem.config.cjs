@@ -9,13 +9,12 @@ module.exports = {
   apps: [
     {
       name: 'pivideo-api',
-      script: 'node_modules/.bin/tsx',
+      script: 'api/node_modules/tsx/dist/cli.mjs',
       args: 'api/src/index.ts',
       cwd: __dirname,
       env: {
         NODE_ENV: 'production',
         PORT: '3100',
-        VIDEO_PROVIDER: 'mock',
       },
       max_memory_restart: '512M',
       log_file: 'storage/logs/api.log',
@@ -26,12 +25,11 @@ module.exports = {
     },
     {
       name: 'pivideo-worker',
-      script: 'node_modules/.bin/tsx',
+      script: 'worker/node_modules/tsx/dist/cli.mjs',
       args: 'worker/src/index.ts',
       cwd: __dirname,
       env: {
         NODE_ENV: 'production',
-        VIDEO_PROVIDER: 'mock',
       },
       max_memory_restart: '512M',
       log_file: 'storage/logs/worker.log',
@@ -42,15 +40,15 @@ module.exports = {
     },
     {
       name: 'pivideo-web',
-      script: 'node_modules/.bin/vite',
+      script: 'node_modules/vite/bin/vite.js',
       args: 'preview --port 5173 --host',
       cwd: __dirname + '/web',
       env: {
         NODE_ENV: 'production',
       },
       max_memory_restart: '256M',
-      log_file: 'storage/logs/web.log',
-      error_file: 'storage/logs/web-error.log',
+      log_file: __dirname + '/storage/logs/web.log',
+      error_file: __dirname + '/storage/logs/web-error.log',
       merge_logs: true,
       autorestart: true,
     },

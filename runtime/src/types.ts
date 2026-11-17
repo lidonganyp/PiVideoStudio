@@ -107,6 +107,28 @@ export interface PromptBundle {
   negative?: string;
   narration: string;
   subtitle: string;
+
+  /** 场景级上下文（同场景共享） */
+  sceneContext?: {
+    location: string;
+    timeOfDay: string;
+    lighting: string;
+    ambientSound: string;
+  };
+
+  /** 衔接说明：与上一分镜的连续性描述 */
+  continuity?: string;
+
+  /** 分镜级精细化字段 */
+  shotType?: string;       // 景别：近景/中景/空镜
+  composition?: string;    // 构图：画面元素布局
+  cameraMovement?: string;   // 运镜手法：固定+微推/缓摇
+  gazeDirection?: string;   // 朝向：墨→凤
+  lipSync?: 'speak' | 'inner' | 'none';  // 口型模式
+  soundDesign?: string;      // 音效设计（分层描述）
+
+  /** 全局质量后缀（按风格模板选择） */
+  globalQualitySuffix?: string;
 }
 
 export type AssetKind = 'character' | 'scene';

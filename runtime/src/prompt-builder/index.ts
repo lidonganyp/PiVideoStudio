@@ -26,6 +26,7 @@ interface StyleTemplateConfig {
   transitionDuration: number;
   bgmStyle: string;
   bgmVolume: number;
+  globalQualitySuffix: string;
 }
 
 function parseTemplate(md: string): StyleTemplateConfig {
@@ -44,6 +45,7 @@ function parseTemplate(md: string): StyleTemplateConfig {
     transitionDuration: parseFloat(extract('转场配置')?.match(/[\d.]+/)?.[0] ?? '0.5'),
     bgmStyle: extract('配乐基调') || 'ambient',
     bgmVolume: parseFloat(extract('配乐基调')?.match(/音量[：:]\s*([\d.]+)/)?.[1] ?? '0.3'),
+    globalQualitySuffix: extract('全局质量后缀'),
   };
 }
 
@@ -65,6 +67,19 @@ interface LLMPromptResult {
   visual: string;
   narration: string;
   subtitle: string;
+  sceneContext: {
+    location: string;
+    timeOfDay: string;
+    lighting: string;
+    ambientSound: string;
+  };
+  continuity: string;
+  shotType: string;
+  composition: string;
+  cameraMovement: string;
+  gazeDirection: string;
+  lipSync: 'speak' | 'inner' | 'none';
+  soundDesign: string;
 }
 
 const SYSTEM_PROMPT = `你是一个专业的 AI 视频提示词工程师。你的任务是为小说分镜生成结构化的视频生成提示词包。
@@ -74,13 +89,24 @@ const SYSTEM_PROMPT = `你是一个专业的 AI 视频提示词工程师。你�
 - visual: 英文画面提示词，必须包含风格后缀，人物分镜必须包含角色外貌描述锚点
 - narration: 中文旁白文本（基于分镜原文精简为 15~50 字）
 - subtitle: 中文字幕文本（与旁白一致或精简版）
+- sceneContext: 场景级上下文对象，含 location（地点）、timeOfDay（时间段）、lighting（环境光影描述）、ambientSound（环境音底描述）
+- continuity: 衔接说明，描述与上一分镜的连续性（如『紧接上一镜头，人物转身离开』；第一个分镜为空字符串）
+- shotType: 景别（空镜/近景/中近景/中景/远景/特写）
+- composition: 构图描述（画面元素布局，如『人物居中，背景虚化，晨光从左侧斜入』）
+- cameraMovement: 运镜手法（固定/微推/缓摇/跟拍/升降）
+- gazeDirection: 朝向（角色视线方向，如『墨→凤』；无角色时为空字符串）
+- lipSync: 口型模式（speak=说话有口型/inner=内心独白嘴唇闭合/none=无台词）
+- soundDesign: 音效设计（分层描述：环境音+动作音+情绪音，如『溪水潺潺、鸟鸣；翻身窸窣；一记心动叮声』）
 
 规则：
 1. visual 必须是英文
 2. visual 必须包含给定的风格后缀
 3. 如果分镜包含角色（characterNames 非空），visual 必须包含角色的外貌描述锚点（从原文提取）
 4. narration 按旁白语速 4~5 字/秒控制长度，对应 estimatedSeconds
-5. subtitle 与 narration 内容一致，可适当精简`;
+5. subtitle 与 narration 内容一致，可适当精简
+6. sceneContext 在同一场景内应保持一致
+7. continuity 第一个分镜为空字符串
+8. lipSync 根据原文是否有对话决定：有对话为 speak，内心活动为 inner，无台词为 none`;
 
 /**
  * 为单个分镜生成 PromptBundle。
@@ -121,6 +147,15 @@ async function buildPromptForSegment(
     negative: template.negative,
     narration: result.narration,
     subtitle: result.subtitle,
+    sceneContext: result.sceneContext,
+    continuity: result.continuity,
+    shotType: result.shotType,
+    composition: result.composition,
+    cameraMovement: result.cameraMovement,
+    gazeDirection: result.gazeDirection,
+    lipSync: result.lipSync,
+    soundDesign: result.soundDesign,
+    globalQualitySuffix: template.globalQualitySuffix,
   };
 }
 
