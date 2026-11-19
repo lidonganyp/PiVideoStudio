@@ -99,7 +99,7 @@ const SYSTEM_PROMPT = `你是顶级 AI 视频提示词工程师，精通电影�
 
 输出 JSON 对象：
 modules（全部英文，供视频模型直接使用）：
-- sceneContext: 场景背景（地点/人物/事件/情绪弧线/整体形式：一镜到底或多镜头）
+- sceneContext: 场景背景（必须以给定场景圣经的场景名为准统一描述，同一场景跨块措辞一致；地点/人物/事件/情绪弧线/整体形式：一镜到底或多镜头）
 - activeReferences: 参考锁定（每个出场角色：@角色名: 外貌逐项描述。100% matches the reference, fully consistent in every shot.）
 - locationMap: 场景地图（物理空间逐项：地面/两侧/远景/天空/道具/人员状态）
 - firstFrameBlocking: 首帧与空间调度（精确构图 + 屏幕坐标如 at x40% frame left + 轴线规则）
@@ -109,7 +109,7 @@ modules（全部英文，供视频模型直接使用）：
 - actionTimeline: 分镜时间轴（按秒分解，基于给定镜头计划展开，每镜头含时间码/景别/运镜/动作）
 - physics: 物理真实感（重量/惯性/滞后，如 hair lags and settles, fabric carries brief inertia, impacts carry real mass）
 - lighting: 灯光（色温数值化如 1900K candlelight + 7500K moonlight、光源方向、跨镜头一致）
-- audio: 声音（对白带情感指示与 [breath] 标记、环境音分层、音效、是否 NO MUSIC）
+- audio: 声音（对白必须保留原文语言（中文）一字不译，情感指示与 [breath] 标记用英文；环境音分层、音效、是否 NO MUSIC）
 - style: 风格（胶片质感 + 调色 + 画质法则）
 negative: 负面清单（英文，以给定负面清单为基础可追加）
 narration: 中文旁白（基于原文精简，按 4~5 字/秒 × 块时长控制字数）
@@ -118,13 +118,14 @@ cameraZh: 中文镜头语言描述（如『中近景，缓慢推进，强调人�
 lipSync: 口型模式（speak=说话有口型/inner=内心独白嘴唇闭合/none=无台词）
 
 规则：
-1. modules 与 negative 全部英文；narration/subtitle/cameraZh 中文
+1. modules 与 negative 全部英文，但对白（dialogue）必须保留原文语言（中文）一字不译；narration/subtitle/cameraZh 中文
 2. actionTimeline 必须基于给定镜头计划（shots）展开，时间码精确到秒，所有镜头时长之和等于块时长；相邻镜头景别不得相同
 3. activeReferences 必须包含给定角色卡的外貌锚点描述，逐项列出
 4. lighting 优先采用给定场景圣经的色温/方向设定，数值化
 5. style 必须包含给定风格后缀与全局质量后缀
 6. firstFrameBlocking 必须遵守给定轴线锁定（axisLock）
-7. 对白保留原文语义，标注情感指示（如 (quiet, restrained)），带 [breath] 等呼吸标记`;
+7. 对白必须保留原文语言（中文）一字不译，禁止翻译成英文或其他语言；情感指示用英文标注（如 (quiet, restrained)），带 [breath] 等呼吸标记。角色名首次出现用中英并用（如 Lin Yi (林逸)）
+8. sceneContext 与 locationMap 必须基于给定场景圣经的场景名与描述展开，同一场景在所有块中保持完全一致的地点描述与视觉基调，禁止自行演绎新地点`;
 
 /** 模块顺序与标题（finalPrompt 组装用） */
 const MODULE_TITLES: Array<{ key: keyof PromptModules; title: string }> = [
@@ -276,6 +277,22 @@ ${sceneBlock}
   });
 
   const modules = fitModulesToBudget(normalizeModules(result.modules));
+  // activeReferences 兜底（v1.1.1）：LLM 漏填时强制注入角色圣经外貌锚点，保证人物一致性
+  if (modules.activeReferences.length === 0 && relevantChars.length > 0) {
+    modules.activeReferences = relevantChars
+      .map((c) => '@' + c.name + ': ' + c.description + '. 100% matches the reference, fully consistent in every shot.')
+      .join(String.fromCharCode(10));
+  }
+  // audio 兜底（v1.1.1）：LLM 漏填时从原文提取中文对白注入，保证对白语言正确
+  if (modules.audio.length === 0) {
+    const dialogues = Array.from(segment.sourceText.matchAll(/[“「"]([^”」"]{2,})[”」"]/g))
+      .map((m) => m[1].trim())
+      .filter((t) => /[一-龥]/.test(t));
+    const dialoguePart = dialogues.length
+      ? ' Dialogue (keep original Chinese, do not translate): ' + dialogues.map((d) => ' + d + ').join(' ')
+      : '';
+    modules.audio = 'NO MUSIC. Layered environment sound consistent with the scene.' + dialoguePart;
+  }
   const negative = (result.negative || template.negative).trim();
   const finalPrompt = assembleFinalPrompt(modules, negative);
 

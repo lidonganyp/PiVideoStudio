@@ -597,7 +597,7 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
             const prompt = seg.prompt?.visual ?? '';
             const qualitySuffix = seg.prompt?.globalQualitySuffix ?? '';
             const fullPrompt = qualitySuffix ? `${prompt} ${qualitySuffix}` : prompt;
-            // 查找角色参考图：优先匹配角色名
+            // 查找角色参考图：优先匹配角色名；无角色分镜回退场景参考图（v1.1.1：场景一致性锚定）
             const charAssets = listAssetsByProject(db, projectId, 'character');
             let referenceImagePath: string | undefined;
             if (seg.characterNames.length > 0) {
@@ -605,6 +605,10 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
                 seg.characterNames.includes(a.name),
               );
               referenceImagePath = matched?.referenceImagePath;
+            }
+            if (referenceImagePath === undefined) {
+              const sceneAssets = listAssetsByProject(db, projectId, 'scene');
+              referenceImagePath = sceneAssets[0]?.referenceImagePath;
             }
             // 首帧链：上一块尾帧作为首帧参考（优先于角色参考图；开关关闭/断链时回退角色参考图）
             const firstFramePath = getFirstFrameRef(db, seg);
