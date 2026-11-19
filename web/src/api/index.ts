@@ -73,6 +73,9 @@ export interface Segment {
     narration: string;
     subtitle: string;
   };
+  shots?: unknown;
+  promptV2?: string;
+  shotClass?: string;
 }
 
 export interface Asset {
@@ -94,10 +97,43 @@ export interface Job {
   providerJobId?: string;
   status: string;
   retryCount: number;
+  priority?: number;
+  providerModel?: string;
+  qcResult?: 'approved' | 'suspect' | 'rejected';
   resultPath?: string;
   error?: string;
   createdAt: string;
   updatedAt: string;
+}
+export interface Series {
+  id: string;
+  title: string;
+  novelProjectId?: string;
+  episodeCount: number;
+  storyBible?: string;
+  createdAt: string;
+}
+export interface ModelRoute {
+  provider: string;
+  model: string;
+}
+export interface ModelRouteTable {
+  tier: string;
+  routes: Record<string, ModelRoute>;
+  route?: ModelRoute;
+}
+export interface ScreenplayScene {
+  sceneNo: number;
+  location: string;
+  timeOfDay: string;
+  lighting: string;
+  characters: string[];
+  emotion: string;
+  content: string;
+  sourceText: string;
+}
+export interface Screenplay {
+  scenes: ScreenplayScene[];
 }
 
 export const api = {
@@ -173,6 +209,27 @@ export const api = {
       { method: 'POST' },
     ),
   exportSegmentsUrl: (id: string) => `/api/projects/${id}/export`,
+  // ---- v1.1 新增 ----
+  listSeries: () => request<Series[]>('/api/series'),
+  createSeries: (data: { title: string; novelProjectId?: string; episodeCount?: number; storyBible?: string }) =>
+    request<{ ok: boolean; series: Series }>('/api/series', { method: 'POST', body: JSON.stringify(data) }),
+  getSeries: (id: string) => request<Series>(`/api/series/${id}`),
+  updateSeries: (id: string, data: { title?: string; episodeCount?: number; storyBible?: string }) =>
+    request<{ ok: boolean; series: Series }>(`/api/series/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getModelRoutes: (shotClass?: string) =>
+    request<ModelRouteTable>(`/api/model-routes${shotClass ? '?shotClass=' + shotClass : ''}`),
+  adaptScreenplay: (projectId: string) =>
+    request<{ ok: boolean; screenplay: Screenplay }>(`/api/projects/${projectId}/adapt-screenplay`, { method: 'POST' }),
+  regenerateSegment: (segmentId: string, options?: { prompt?: unknown; draft?: boolean }) =>
+    request<{ ok: boolean; segment: Segment }>(`/api/segments/${segmentId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
+    }),
+  generateSegmentsDraft: (projectId: string) =>
+    request<{ ok: boolean; jobs: Job[]; errors?: unknown[] }>(`/api/projects/${projectId}/generate-segments`, {
+      method: 'POST',
+      body: JSON.stringify({ draft: true }),
+    }),
 };
 
 export interface NovelProject {

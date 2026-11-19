@@ -106,6 +106,8 @@ async function doAction(name: string, fn: () => Promise<unknown>) {
 
 const analyzeStory = () =>
   doAction('analyze', () => api.analyzeStory(projectId));
+const adaptScreenplay = () =>
+  doAction('adapt', () => api.adaptScreenplay(projectId));
 const splitText = () => doAction('split', () => api.splitText(projectId));
 const loadEstimate = () =>
   doAction('estimate', async () => {
@@ -336,6 +338,14 @@ onUnmounted(stopPolling);
       </div>
     </section>
 
+    <!-- 剧本改编（v1.1） -->
+    <section v-if="storyProfile && segments.length === 0" class="card">
+      <h2>剧本改编</h2>
+      <p class="hint">将小说文本改编为结构化剧本（场景表），为切片和提示词构建提供基础。</p>
+      <button @click="adaptScreenplay" :disabled="actionLoading === 'adapt'" class="btn primary">
+        {{ actionLoading === 'adapt' ? '改编中...' : '改编剧本' }}
+      </button>
+    </section>
     <!-- Step 2: 切片确认 -->
     <section v-if="step === 'segments'" class="card">
       <h2>第 2 步：生成场景切片</h2>

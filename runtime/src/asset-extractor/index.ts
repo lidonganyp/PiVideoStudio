@@ -1,8 +1,16 @@
+/**
+ * 资产提取（v1.1）：升级为角色圣经 / 场景圣经。
+ *
+ * 升级要点：
+ * - 角色卡结构化：外貌逐项（发型/发色/瞳色/五官/体态/服装/配饰）+ 气质关键词
+ * - 场景卡圣经化：灯光规格（光源方向+色温数值化，如『左侧窗光 5600K』）+ 声音规格
+ * - scope 层级：默认 project（集级）；剧集级共享资产由上层标记为 series
+ * - 提示词构建时强制注入 100% matches the reference 锁定（见 prompt-builder）
+ */
 import type { DatabaseSync } from 'node:sqlite';
 import { callLLMAsJSON } from '../llm/gateway';
 import {
   getProject,
-  listSegmentsByProject,
   transitionProjectStatus,
   createAsset,
   listAssetsByProject,
@@ -13,14 +21,19 @@ import type { AssetKind, VideoProject } from '../types';
 interface LLMCharacterCard {
   name: string;
   appearance: string;
+  hair: string;
+  eyes: string;
+  build: string;
   clothing: string;
+  accessories: string;
   temperament: string;
 }
 
 interface LLMSceneCard {
   name: string;
   location: string;
-  lighting: string;
+  lightingSpec: string;
+  audioSpec: string;
   props: string;
 }
 
@@ -29,24 +42,31 @@ interface LLMAssetResult {
   scenes: LLMSceneCard[];
 }
 
-const SYSTEM_PROMPT = `你是一个专业的小说资产提取器。你的任务是从小说章节文本中提取角色卡和场景卡。
+const SYSTEM_PROMPT = `你是一个专业的小说资产提取器。你的任务是从小说章节文本中提取角色圣经卡和场景圣经卡。
 
-角色卡字段：
+角色卡字段（外貌必须逐项具体，可直接用于画面生成与跨镜头锁定）：
 - name: 角色名
-- appearance: 外貌描述（发型、五官、体型等）
-- clothing: 服装描述
-- temperament: 气质描述
+- appearance: 五官与肤质描述
+- hair: 发型与发色（如『黑色长发，低马尾，碎发刘海』）
+- eyes: 瞳色与眼神（如『深棕色，眼神锐利』）
+- build: 体态（如『高挑清瘦，肩背挺直』）
+- clothing: 服装逐项（上装/下装/鞋/外套，如『白色立领衬衫，深灰西裤，黑色皮鞋』）
+- accessories: 配饰（如『银色细链项链，左手腕表』；无则空字符串）
+- temperament: 气质关键词（2~4 个词）
 
-场景卡字段：
+场景卡字段（灯光规格必须数值化，供跨块灯光一致性锁定）：
 - name: 场景名
-- location: 地点描述
-- lighting: 光线描述
-- props: 道具描述
+- location: 地点与空间描述
+- lightingSpec: 灯光规格（光源方向+色温+光质，如『左侧窗光 5600K 柔光，室内暖灯 3000K 补光，高对比』）
+- audioSpec: 声音规格（环境音分层，如『雨声持续，远处雷声，室内翻纸声』）
+- props: 关键道具
 
 规则：
 1. 只提取有名字的角色，群众不提取
 2. 场景按地点切换提取，不重复
-3. 描述要具体、可用于后续画面生成
+3. 角色外貌必须从原文提取并具体化；原文未提及的项基于人设合理推断，不留空
+4. 灯光规格必须包含色温数值（K）与光源方向
+5. 描述要具体、可用于后续画面生成
 
 输出格式：JSON 对象，包含 characters 数组和 scenes 数组。`;
 
@@ -79,7 +99,7 @@ function buildContextBlock(
 }
 
 /**
- * 资产提取：从章节文本提取角色卡与场景卡，写入 video_assets。
+ * 资产提取：从章节文本提取角色圣经卡与场景圣经卡，写入 video_assets。
  * 项目状态：planning → asset_extracting → planning（完成后回到可审阅状态）。
  */
 export async function extractAssets(
@@ -103,48 +123,57 @@ export async function extractAssets(
     const contextBlock = buildContextBlock(project.novelSource.novelContext);
     const result = await callLLMAsJSON<LLMAssetResult>({
       system: SYSTEM_PROMPT,
-      user: `${contextBlock}请从以下小说文本中提取角色卡和场景卡：\n\n${rawText}`,
+      user: `${contextBlock}请从以下小说文本中提取角色圣经卡和场景圣经卡：\n\n${rawText}`,
       temperature: 0.3,
     });
 
-    // 清除旧资产（重新提取时覆盖）
+    // 清除旧资产（重新提取时覆盖；剧集级共享资产保留）
     const existing = listAssetsByProject(db, projectId);
     for (const asset of existing) {
+      if (asset.scope === 'series') continue; // 剧集级资产不随集级重提取删除
       deleteAsset(db, asset.id);
     }
 
-    // 写入角色卡
+    // 写入角色圣经卡
     if (Array.isArray(result.characters)) {
       for (const ch of result.characters) {
         if (!ch.name) continue;
         const description = [
-          ch.appearance || '',
-          ch.clothing || '',
-          ch.temperament || '',
-        ].filter(Boolean).join('；');
+          ch.appearance ? `五官：${ch.appearance}` : '',
+          ch.hair ? `发型发色：${ch.hair}` : '',
+          ch.eyes ? `瞳色眼神：${ch.eyes}` : '',
+          ch.build ? `体态：${ch.build}` : '',
+          ch.clothing ? `服装：${ch.clothing}` : '',
+          ch.accessories ? `配饰：${ch.accessories}` : '',
+          ch.temperament ? `气质：${ch.temperament}` : '',
+        ]
+          .filter(Boolean)
+          .join('；');
         createAsset(db, {
           projectId,
           kind: 'character' as AssetKind,
           name: ch.name,
           description,
+          scope: 'project',
         });
       }
     }
 
-    // 写入场景卡
+    // 写入场景圣经卡（含灯光/声音规格）
     if (Array.isArray(result.scenes)) {
       for (const sc of result.scenes) {
         if (!sc.name) continue;
-        const description = [
-          sc.location || '',
-          sc.lighting || '',
-          sc.props || '',
-        ].filter(Boolean).join('；');
+        const description = [sc.location || '', sc.props || '']
+          .filter(Boolean)
+          .join('；');
         createAsset(db, {
           projectId,
           kind: 'scene' as AssetKind,
           name: sc.name,
           description,
+          lightingSpec: sc.lightingSpec || '',
+          audioSpec: sc.audioSpec || '',
+          scope: 'project',
         });
       }
     }

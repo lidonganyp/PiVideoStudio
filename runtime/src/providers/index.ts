@@ -17,6 +17,8 @@ export interface SubmitJobInput {
   estimatedSeconds: number;
   /** 参考图路径（i2v 模式） */
   referenceImagePath?: string;
+  /** 首帧参考图路径（首帧链：上一块尾帧，v1.1） */
+  firstFramePath?: string;
 }
 
 export interface SubmitResult {
@@ -29,9 +31,25 @@ export interface QueryResult {
   error?: string;
 }
 
+/** 供应商能力元数据：描述单个视频 Provider 的能力边界 */
+export interface ProviderCapability {
+  /** 单片段最长时长（秒） */
+  maxDuration: number;
+  /** 支持的分辨率档位 */
+  supportedResolutions: string[];
+  /** 是否支持首帧参考图（i2v） */
+  supportsFirstFrame: boolean;
+  /** 是否支持音频/对白生成 */
+  supportsAudio: boolean;
+  /** 接口并发上限 */
+  maxConcurrency: number;
+}
+
 /** 视频生成供应商接口 */
 export interface VideoProvider {
   name: string;
+  /** 能力元数据 */
+  capability: ProviderCapability;
   submit(job: SubmitJobInput): Promise<SubmitResult>;
   query(providerJobId: string): Promise<QueryResult>;
 }
@@ -49,6 +67,14 @@ const MOCK_VIDEOS = [
  */
 export class MockProvider implements VideoProvider {
   name = 'mock';
+
+  readonly capability: ProviderCapability = {
+    maxDuration: 30,
+    supportedResolutions: ['768P'],
+    supportsFirstFrame: true,
+    supportsAudio: false,
+    maxConcurrency: 99,
+  };
 
   /**
    * 无状态实现：不依赖进程内 Map，保证 API 进程 submit 的任务
@@ -85,6 +111,14 @@ export class MockProvider implements VideoProvider {
 export class MiniMaxProvider implements VideoProvider {
   name = 'minimax';
 
+  readonly capability: ProviderCapability = {
+    maxDuration: 30,
+    supportedResolutions: ['768P', '1080P'],
+    supportsFirstFrame: true,
+    supportsAudio: true,
+    maxConcurrency: 4,
+  };
+
   private baseUrl: string;
   private token: string;
   private model: string;
@@ -92,10 +126,10 @@ export class MiniMaxProvider implements VideoProvider {
   private duration: number;
   private ratio: string;
 
-  constructor() {
+  constructor(modelOverride?: string) {
     this.baseUrl = process.env.MINIMAX_BASE_URL ?? 'https://metaso.cn/api/minimax';
     this.token = process.env.MINIMAX_API_KEY ?? '';
-    this.model = process.env.MINIMAX_MODEL ?? 'MiniMax-H3';
+    this.model = modelOverride ?? process.env.MINIMAX_MODEL ?? 'MiniMax-H3';
     this.resolution = process.env.MINIMAX_RESOLUTION ?? '768P';
     this.duration = Number(process.env.MINIMAX_DURATION ?? '5');
     this.ratio = process.env.MINIMAX_RATIO ?? '16:9';
@@ -108,10 +142,12 @@ export class MiniMaxProvider implements VideoProvider {
   async submit(job: SubmitJobInput): Promise<SubmitResult> {
     const url = `${this.baseUrl}/v2/video_generation`;
     const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
-    if (job.referenceImagePath) {
-      const imageUrl = job.referenceImagePath.startsWith('http')
-        ? job.referenceImagePath
-        : `${process.env.PIVIDEO_WEB_URL ?? 'http://localhost:5173'}/files/${job.referenceImagePath.replace(/^storage\//, '')}`;
+    // 首帧链：上一块尾帧作为首帧参考（优先于角色参考图，二者互斥使用）
+    const firstFrame = job.firstFramePath ?? job.referenceImagePath;
+    if (firstFrame) {
+      const imageUrl = firstFrame.startsWith('http')
+        ? firstFrame
+        : `${process.env.PIVIDEO_WEB_URL ?? 'http://localhost:5173'}/files/${firstFrame.replace(/^storage\//, '')}`;
       content.push({ type: 'image_url', image_url: { url: imageUrl } });
     }
     content.push({ type: 'text', text: job.prompt });
@@ -119,7 +155,7 @@ export class MiniMaxProvider implements VideoProvider {
       model: this.model,
       content,
       resolution: this.resolution,
-      duration: Math.min(Math.max(job.estimatedSeconds, 5), 15),
+      duration: Math.min(Math.max(job.estimatedSeconds, 5), this.capability.maxDuration),
       ratio: this.ratio,
       fast_mode: false,
     };
@@ -238,6 +274,126 @@ export interface ImageProvider {
   }>;
 }
 
+// --- MiniMaxImageProvider ---
+import { STORAGE_DIR } from '../storage';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { SeedanceProvider } from './seedance';
+
+export { SeedanceProvider } from './seedance';
+
+/**
+ * MiniMaxImageProvider：通过 MiniMax API 生成角色/场景参考图。
+ * 同步调用模式：submit 时直接请求 API 并下载图片到本地。
+ */
+export class MiniMaxImageProvider implements ImageProvider {
+  name = 'minimax-image';
+  private baseUrl: string;
+  private token: string;
+  private model: string;
+  private results = new Map<string, { status: 'pending' | 'running' | 'succeeded' | 'failed'; images?: ImageResult[]; error?: string }>();
+
+  constructor() {
+    this.baseUrl = process.env.MINIMAX_BASE_URL ?? 'https://metaso.cn/api/minimax';
+    this.token = process.env.MINIMAX_API_KEY ?? '';
+    this.model = process.env.MINIMAX_IMAGE_MODEL ?? 'MiniMax-H3-Image';
+    if (!this.token) {
+      throw new Error('MINIMAX_API_KEY 未设置，无法使用 MiniMaxImageProvider');
+    }
+  }
+
+  private assetIds = new Map<string, string>();
+
+  async submit(job: ImageSubmitInput): Promise<{ providerJobId: string }> {
+    const url = `${this.baseUrl}/v2/image_generation`;
+    const isPortrait = job.aspectRatio === '9:16';
+    const body = {
+      model: this.model,
+      prompt: job.prompt,
+      n: 1,
+      aspect_ratio: isPortrait ? '9:16' : '16:9',
+      response_format: 'url',
+    };
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`MiniMax image API error: HTTP ${resp.status} ${errText.slice(0, 300)}`);
+    }
+
+    const data = await resp.json() as { task_id?: string };
+    if (!data.task_id) {
+      throw new Error('MiniMax image API 未返回 task_id');
+    }
+
+    this.assetIds.set(data.task_id, job.assetId);
+    console.log(`[minimax-image-provider] submit assetId=${job.assetId} taskId=${data.task_id}`);
+    return { providerJobId: data.task_id };
+  }
+
+  async query(providerJobId: string): Promise<{
+    status: 'pending' | 'running' | 'succeeded' | 'failed';
+    images?: ImageResult[];
+    error?: string;
+  }> {
+    const url = `${this.baseUrl}/v2/query/image_generation/${providerJobId}`;
+    const resp = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${this.token}` },
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      return { status: 'failed', error: `query failed: HTTP ${resp.status} ${errText.slice(0, 200)}` };
+    }
+
+    const data = await resp.json() as {
+      task?: {
+        status: string;
+        content?: { url?: string; file_id?: string };
+      };
+    };
+
+    const task = data.task;
+    if (!task) {
+      return { status: 'running' };
+    }
+
+    if (task.status === 'succeeded' && task.content?.url) {
+      const assetId = this.assetIds.get(providerJobId) ?? 'unknown';
+      const imageDir = resolve(STORAGE_DIR, 'images', assetId);
+      mkdirSync(imageDir, { recursive: true });
+
+      const localPath = resolve(imageDir, 'candidate_1.jpg');
+      const imgResp = await fetch(task.content.url);
+      if (!imgResp.ok) {
+        return { status: 'failed', error: `下载图片失败: HTTP ${imgResp.status}` };
+      }
+      const buffer = Buffer.from(await imgResp.arrayBuffer());
+      writeFileSync(localPath, buffer);
+
+      console.log(`[minimax-image-provider] query succeeded, image saved for assetId=${assetId}`);
+      return {
+        status: 'succeeded',
+        images: [{ imageUrl: `storage/images/${assetId}/candidate_1.jpg` }],
+      };
+    }
+
+    if (task.status === 'failed') {
+      return { status: 'failed', error: 'MiniMax image generation failed' };
+    }
+
+    return { status: 'running' };
+  }
+}
+
 // --- MockImageProvider ---
 
 const MOCK_IMAGES = [
@@ -308,6 +464,9 @@ export function getVideoProvider(): VideoProvider {
     case 'minimax':
       cachedProvider = new MiniMaxProvider();
       break;
+    case 'seedance':
+      cachedProvider = new SeedanceProvider();
+      break;
     // case 'keling':
     //   cachedProvider = new KelingProvider();
     //   break;
@@ -319,12 +478,29 @@ export function getVideoProvider(): VideoProvider {
     //   break;
     default:
       throw new Error(
-        `未知的 VIDEO_PROVIDER: ${providerName}（当前支持: mock, minimax）`,
+        `未知的 VIDEO_PROVIDER: ${providerName}（当前支持: mock, minimax, seedance）`,
       );
   }
 
   console.log(`[provider-gateway] 使用视频供应商: ${cachedProvider.name}`);
   return cachedProvider;
+}
+
+/**
+ * 按名称（与可选模型覆盖）实例化 Provider（v1.1 模型路由用）。
+ * 每次返回新实例以应用模型覆盖，调用方按需缓存。
+ */
+export function getProviderByName(name: string, model?: string): VideoProvider {
+  switch (name) {
+    case 'mock':
+      return new MockProvider();
+    case 'minimax':
+      return new MiniMaxProvider(model);
+    case 'seedance':
+      return new SeedanceProvider(model);
+    default:
+      throw new Error(`未知的 provider: ${name}（当前支持: mock, minimax, seedance）`);
+  }
 }
 
 let cachedImageProvider: ImageProvider | undefined;
@@ -342,9 +518,12 @@ export function getImageProvider(): ImageProvider {
     case 'mock':
       cachedImageProvider = new MockImageProvider();
       break;
+    case 'minimax':
+      cachedImageProvider = new MiniMaxImageProvider();
+      break;
     default:
       throw new Error(
-        `未知的 IMAGE_PROVIDER: ${providerName}（当前支持: mock）`,
+        `未知的 IMAGE_PROVIDER: ${providerName}（当前支持: mock, minimax）`,
       );
   }
 

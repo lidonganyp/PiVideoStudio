@@ -13,5 +13,8 @@
   "devDependencies": {
     "@types/node": "^22.20.5",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "node-edge-tts": "^1.2.12"
   }
 }

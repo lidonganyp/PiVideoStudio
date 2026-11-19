@@ -13,6 +13,9 @@ interface JobRow {
   provider_job_id: string | null;
   status: string;
   retry_count: number;
+  priority: number;
+  qc_result: string | null;
+  provider_model: string | null;
   result_path: string | null;
   error: string | null;
   created_at: string;
@@ -29,6 +32,9 @@ function rowToJob(row: JobRow): VideoJob {
     providerJobId: row.provider_job_id ?? undefined,
     status: row.status as JobStatus,
     retryCount: row.retry_count,
+    priority: row.priority,
+    qcResult: (row.qc_result as VideoJob['qcResult']) ?? undefined,
+    providerModel: row.provider_model ?? undefined,
     resultPath: row.result_path ?? undefined,
     error: row.error ?? undefined,
     createdAt: row.created_at,
@@ -42,6 +48,8 @@ export interface CreateJobInput {
   kind: JobKind;
   provider: string;
   providerJobId?: string;
+  /** 队列优先级：2=人工确认 regenerate / 1=失败重试 / 0=批量生成（默认） */
+  priority?: number;
 }
 
 export function createJob(db: DatabaseSync, input: CreateJobInput): VideoJob {
@@ -55,14 +63,15 @@ export function createJob(db: DatabaseSync, input: CreateJobInput): VideoJob {
     providerJobId: input.providerJobId,
     status: 'queued',
     retryCount: 0,
+    priority: input.priority ?? 0,
     createdAt: now,
     updatedAt: now,
   };
   db.prepare(
     `INSERT INTO video_jobs
        (id, project_id, segment_id, kind, provider, provider_job_id,
-        status, retry_count, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        status, retry_count, priority, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     job.id,
     job.projectId,
@@ -72,6 +81,7 @@ export function createJob(db: DatabaseSync, input: CreateJobInput): VideoJob {
     job.providerJobId ?? null,
     job.status,
     job.retryCount,
+    job.priority ?? 0,
     job.createdAt,
     job.updatedAt,
   );
@@ -103,6 +113,9 @@ export interface UpdateJobFields {
   providerJobId?: string;
   status?: JobStatus;
   retryCount?: number;
+  priority?: number;
+  qcResult?: VideoJob['qcResult'];
+  providerModel?: string;
   resultPath?: string;
   error?: string;
 }
@@ -122,13 +135,16 @@ export function updateJob(
   };
   db.prepare(
     `UPDATE video_jobs
-       SET provider_job_id = ?, status = ?, retry_count = ?,
-           result_path = ?, error = ?, updated_at = ?
+       SET provider_job_id = ?, status = ?, retry_count = ?, priority = ?,
+           qc_result = ?, provider_model = ?, result_path = ?, error = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     next.providerJobId ?? null,
     next.status,
     next.retryCount,
+    next.priority ?? 0,
+    next.qcResult ?? null,
+    next.providerModel ?? null,
     next.resultPath ?? null,
     next.error ?? null,
     next.updatedAt,

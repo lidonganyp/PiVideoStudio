@@ -38,3 +38,10 @@ export {
   updateJob,
 } from './jobs';
 export type { CreateJobInput, UpdateJobFields, JobStatus } from './jobs';
+export {
+  createSeries,
+  getSeries,
+  listSeries,
+  updateSeries,
+} from './series';
+export type { CreateSeriesInput, UpdateSeriesFields } from './series';

@@ -97,6 +97,25 @@ export function migrate(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_video_jobs_project ON video_jobs(project_id);
     CREATE INDEX IF NOT EXISTS idx_video_jobs_status ON video_jobs(status);
+
+    CREATE TABLE IF NOT EXISTS series (
+      id               TEXT PRIMARY KEY,
+      title            TEXT NOT NULL,
+      novel_project_id TEXT,
+      episode_count    INTEGER NOT NULL DEFAULT 0,
+      story_bible      TEXT,
+      created_at       TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS music_assets (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      source      TEXT NOT NULL DEFAULT 'library',
+      license     TEXT NOT NULL DEFAULT 'licensed',
+      has_ip_risk INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // 幂等列迁移：场景切片扩展字段（event/character_state/next_scene_hint）
@@ -115,6 +134,23 @@ export function migrate(db: DatabaseSync): void {
     }
   }
 
+  // 幂等列迁移：v1.1 叙事块扩展字段（shots/shot_class/axis_lock/prompt_v2）
+  const v11SegmentColumns = db
+    .prepare("PRAGMA table_info(video_segments)")
+    .all() as Array<{ name: string }>;
+  const v11Existing = new Set(v11SegmentColumns.map((c) => c.name));
+  const v11Additions: Array<[string, string]> = [
+    ['shots', 'TEXT'], // JSON: ShotPlan[]（30s 叙事块内按秒分镜）
+    ['shot_class', 'TEXT'], // 模型路由标注（ShotClass）
+    ['axis_lock', 'TEXT'], // 轴线锁定声明
+    ['prompt_v2', 'TEXT'], // JSON: PromptBundleV2（12 模块提示词）
+  ];
+  for (const [column, ddl] of v11Additions) {
+    if (!v11Existing.has(column)) {
+      db.exec(`ALTER TABLE video_segments ADD COLUMN ${column} ${ddl}`);
+    }
+  }
+
   // 幂等列迁移：video_assets 候选参考图字段
   const assetColumns = db
     .prepare("PRAGMA table_info(video_assets)")
@@ -124,5 +160,34 @@ export function migrate(db: DatabaseSync): void {
     db.exec(
       "ALTER TABLE video_assets ADD COLUMN candidate_images TEXT NOT NULL DEFAULT '[]'",
     );
+  }
+
+  // 幂等列迁移：v1.1 资产圣经扩展字段（scope/variant_of/lighting_spec/audio_spec/voice_id）
+  const v11AssetAdditions: Array<[string, string]> = [
+    ['scope', "TEXT NOT NULL DEFAULT 'project'"], // series=剧集级共享 / project=集级
+    ['variant_of', 'TEXT'], // wardrobe variant：指向主角色卡 ID
+    ['lighting_spec', 'TEXT'], // 场景灯光规格（色温/方向数值化）
+    ['audio_spec', 'TEXT'], // 场景声音规格
+    ['voice_id', 'TEXT'], // 角色音色绑定（Voice Registry）
+  ];
+  for (const [column, ddl] of v11AssetAdditions) {
+    if (!assetExisting.has(column)) {
+      db.exec(`ALTER TABLE video_assets ADD COLUMN ${column} ${ddl}`);
+    }
+  }
+
+  // 幂等列迁移：v1.1 队列优先级（2=人工确认 regenerate / 1=失败重试 / 0=批量生成）
+  const jobColumns = db
+    .prepare("PRAGMA table_info(video_jobs)")
+    .all() as Array<{ name: string }>;
+  const jobExisting = new Set(jobColumns.map((c) => c.name));
+  if (!jobExisting.has('priority')) {
+    db.exec('ALTER TABLE video_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!jobExisting.has('qc_result')) {
+    db.exec("ALTER TABLE video_jobs ADD COLUMN qc_result TEXT CHECK (qc_result IN ('approved', 'suspect', 'rejected'))");
+  }
+  if (!jobExisting.has('provider_model')) {
+    db.exec('ALTER TABLE video_jobs ADD COLUMN provider_model TEXT');
   }
 }

@@ -46,6 +46,16 @@ import {
   loginNovelStudio,
   listNovelProjects,
   fetchChapters,
+  adaptScreenplay,
+  getFirstFrameRef,
+  getProviderByName,
+  getQualityTier,
+  createSeries,
+  getSeries,
+  listSeries,
+  updateSeries,
+  getRouteTable,
+  routeShot,
   STORAGE_DIR,
   type CreateProjectInput,
 } from '@pivideo/runtime';
@@ -60,6 +70,57 @@ migrate(db);
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'pivideo-api' });
+});
+// 模型路由查询：返回当前质量档位与完整路由表；可选 ?shotClass= 查询单个镜头类型的路由
+app.get('/api/model-routes', (req, res) => {
+  const tier = getQualityTier();
+  const routes = getRouteTable();
+  const shotClass = typeof req.query.shotClass === 'string' ? req.query.shotClass : '';
+  if (shotClass) {
+    if (
+      shotClass !== 'dialogue' &&
+      shotClass !== 'performance' &&
+      shotClass !== 'vfx' &&
+      shotClass !== 'broll' &&
+      shotClass !== 'draft'
+    ) {
+      res.status(400).json({ error: `invalid shotClass: ${shotClass}` });
+      return;
+    }
+    res.json({ ok: true, tier, routes, route: routeShot(shotClass) });
+    return;
+  }
+  res.json({ ok: true, tier, routes });
+});
+// 剧集管理（v1.1 跨集叙事排播）：300 集短剧顶层容器 + Story Bible 全局层
+app.get('/api/series', (_req, res) => {
+  res.json(listSeries(db));
+});
+app.post('/api/series', (req, res) => {
+  const { title, novelProjectId, episodeCount, storyBible } = req.body ?? {};
+  if (!title) {
+    res.status(400).json({ error: 'title is required' });
+    return;
+  }
+  const series = createSeries(db, { title, novelProjectId, episodeCount, storyBible });
+  res.json({ ok: true, series });
+});
+app.get('/api/series/:id', (req, res) => {
+  const series = getSeries(db, req.params.id);
+  if (!series) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  res.json(series);
+});
+app.put('/api/series/:id', (req, res) => {
+  const { title, episodeCount, storyBible } = req.body ?? {};
+  const series = updateSeries(db, req.params.id, { title, episodeCount, storyBible });
+  if (!series) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  res.json({ ok: true, series });
 });
 
 app.get('/api/projects', (_req, res) => {
@@ -135,6 +196,16 @@ app.post('/api/projects/:id/estimate', (req, res) => {
   }
 });
 
+// 剧本化改写：将小说原文改写为分场剧本，存入 novelSource.screenplay，作为拆分与提示词生成的输入
+app.post('/api/projects/:id/adapt-screenplay', async (req, res) => {
+  try {
+    const screenplay = await adaptScreenplay(db, req.params.id);
+    res.json({ ok: true, screenplay });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
 app.post('/api/projects/:id/split', async (req, res) => {
   try {
     await splitText(db, req.params.id);
@@ -185,10 +256,11 @@ app.post('/api/assets/:id/generate-images', async (req, res) => {
       return;
     }
     const provider = getImageProvider();
+    const project = getProject(db, asset.projectId);
     const submitResult = await provider.submit({
       assetId: asset.id,
       prompt: asset.description,
-      aspectRatio: '9:16',
+      aspectRatio: project?.aspectRatio ?? '16:9',
     });
     // 在线轮询等待候选图就绪（最多 30s，mock 模式约 2s）
     const deadline = Date.now() + 30_000;
@@ -297,12 +369,17 @@ app.post('/api/segments/:id/regenerate', async (req, res) => {
     transitionSegmentStatus(db, seg.id, 'queued');
     const project = getProject(db, seg.projectId);
     if (project) {
-      const provider = getVideoProvider();
+      // 草稿-精修两段式（v1.1）：人工 regenerate=精修，按块 shotClass 走高能力模型；
+      // body 传 draft=true 时走 draft 档（低成本快速迭代）
+      const { draft } = req.body ?? {};
+      const route = draft === true ? routeShot('draft') : routeShot(seg.shotClass);
+      const provider = getProviderByName(route.provider, route.model);
       const job = createJob(db, {
         projectId: seg.projectId,
         segmentId: seg.id,
         kind: 't2v',
-        provider: provider.name,
+        provider: route.provider,
+        priority: 2, // 人工确认：最高优先级出队
       });
       const submitResult = await provider.submit({
         segmentId: seg.id,
@@ -313,6 +390,7 @@ app.post('/api/segments/:id/regenerate', async (req, res) => {
       });
       updateJob(db, job.id, {
         providerJobId: submitResult.providerJobId,
+        providerModel: route.model,
         status: 'running',
       });
       transitionSegmentStatus(db, seg.id, 'submitted');
@@ -487,6 +565,8 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
       return;
     }
     const segments = listSegmentsByProject(db, projectId);
+    // 草稿-精修两段式（v1.1）：body 传 draft=true 时整集走 draft 档（低成本跑通叙事），精修走 shotClass 路由
+    const { draft } = req.body ?? {};
     // prompt_ready + failed（如 429 限流失败，已有 prompt 可直接重提；failed→queued 为合法转换）
     const ready = segments.filter(
       (s) => s.status === 'prompt_ready' || (s.status === 'failed' && s.prompt),
@@ -495,7 +575,6 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
       res.status(400).json({ error: '没有 prompt_ready 状态的分镜可生成' });
       return;
     }
-    const provider = getVideoProvider();
     const concurrency = Number(process.env.GENERATE_CONCURRENCY ?? 3);
     transitionProjectStatus(db, projectId, 'segment_generating');
     const jobs: VideoJob[] = [];
@@ -505,11 +584,14 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
       const results = await Promise.all(
         batch.map(async (seg) => {
           transitionSegmentStatus(db, seg.id, 'queued');
+          // 模型路由（v1.1）：按块 shotClass 分流（test 全 H3；prod 对话/表演/VFX→2.5、broll→2.0-mini、draft→2.0-fast）
+          const route = draft === true ? routeShot('draft') : routeShot(seg.shotClass);
+          const provider = getProviderByName(route.provider, route.model);
           const job = createJob(db, {
             projectId,
             segmentId: seg.id,
             kind: 't2v',
-            provider: provider.name,
+            provider: route.provider,
           });
           try {
             const prompt = seg.prompt?.visual ?? '';
@@ -524,16 +606,20 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
               );
               referenceImagePath = matched?.referenceImagePath;
             }
+            // 首帧链：上一块尾帧作为首帧参考（优先于角色参考图；开关关闭/断链时回退角色参考图）
+            const firstFramePath = getFirstFrameRef(db, seg);
             const submitResult = await provider.submit({
               segmentId: seg.id,
               prompt: fullPrompt,
               negative: seg.prompt?.negative,
               aspectRatio: project.aspectRatio,
               estimatedSeconds: seg.estimatedSeconds,
-              referenceImagePath,
+              referenceImagePath: firstFramePath ? undefined : referenceImagePath,
+              firstFramePath,
             });
             updateJob(db, job.id, {
               providerJobId: submitResult.providerJobId,
+              providerModel: route.model,
               status: 'running',
             });
             transitionSegmentStatus(db, seg.id, 'submitted');

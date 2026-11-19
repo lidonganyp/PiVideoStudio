@@ -1,6 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { PromptBundle, Segment, SegmentStatus } from '../types';
+import type {
+  PromptBundle,
+  PromptBundleV2,
+  Segment,
+  SegmentStatus,
+  ShotPlan,
+} from '../types';
+import type { ShotClass } from '../providers/router';
 import { canSegmentTransition } from '../state-machine';
 
 interface SegmentRow {
@@ -18,6 +25,10 @@ interface SegmentRow {
   status: string;
   current_version: number;
   prompt_bundle: string | null;
+  shots: string | null;
+  shot_class: string | null;
+  axis_lock: string | null;
+  prompt_v2: string | null;
 }
 
 function rowToSegment(row: SegmentRow): Segment {
@@ -38,6 +49,12 @@ function rowToSegment(row: SegmentRow): Segment {
     prompt: row.prompt_bundle
       ? (JSON.parse(row.prompt_bundle) as PromptBundle)
       : undefined,
+    shots: row.shots ? (JSON.parse(row.shots) as ShotPlan[]) : undefined,
+    shotClass: (row.shot_class as ShotClass | null) ?? undefined,
+    axisLock: row.axis_lock ?? undefined,
+    promptV2: row.prompt_v2
+      ? (JSON.parse(row.prompt_v2) as PromptBundleV2)
+      : undefined,
   };
 }
 
@@ -52,6 +69,12 @@ export interface CreateSegmentInput {
   event?: string;
   characterState?: string;
   nextSceneHint?: string;
+  /** v1.1：30s 叙事块内按秒分镜 */
+  shots?: ShotPlan[];
+  /** v1.1：模型路由标注 */
+  shotClass?: ShotClass;
+  /** v1.1：轴线锁定声明 */
+  axisLock?: string;
 }
 
 export function createSegment(db: DatabaseSync, input: CreateSegmentInput): Segment {
@@ -69,14 +92,17 @@ export function createSegment(db: DatabaseSync, input: CreateSegmentInput): Segm
     nextSceneHint: input.nextSceneHint ?? '',
     status: 'draft',
     currentVersion: 1,
+    shots: input.shots,
+    shotClass: input.shotClass,
+    axisLock: input.axisLock,
   };
   db.prepare(
     `INSERT INTO video_segments
        (id, project_id, seq_order, source_text, scene_summary,
         character_names, emotion, estimated_seconds,
         event, character_state, next_scene_hint,
-        status, current_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        status, current_version, shots, shot_class, axis_lock)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     segment.id,
     segment.projectId,
@@ -91,6 +117,9 @@ export function createSegment(db: DatabaseSync, input: CreateSegmentInput): Segm
     segment.nextSceneHint,
     segment.status,
     segment.currentVersion,
+    segment.shots ? JSON.stringify(segment.shots) : null,
+    segment.shotClass ?? null,
+    segment.axisLock ?? null,
   );
   return segment;
 }
@@ -136,6 +165,11 @@ export interface UpdateSegmentFields {
   characterState?: string;
   nextSceneHint?: string;
   prompt?: PromptBundle;
+  /** v1.1 */
+  shots?: ShotPlan[];
+  shotClass?: ShotClass;
+  axisLock?: string;
+  promptV2?: PromptBundleV2;
 }
 
 export function updateSegment(
@@ -150,7 +184,8 @@ export function updateSegment(
     `UPDATE video_segments
        SET scene_summary = ?, character_names = ?, emotion = ?,
            estimated_seconds = ?, event = ?, character_state = ?,
-           next_scene_hint = ?, prompt_bundle = ?
+           next_scene_hint = ?, prompt_bundle = ?,
+           shots = ?, shot_class = ?, axis_lock = ?, prompt_v2 = ?
      WHERE id = ?`,
   ).run(
     next.sceneSummary,
@@ -161,6 +196,10 @@ export function updateSegment(
     next.characterState,
     next.nextSceneHint,
     next.prompt ? JSON.stringify(next.prompt) : null,
+    next.shots ? JSON.stringify(next.shots) : null,
+    next.shotClass ?? null,
+    next.axisLock ?? null,
+    next.promptV2 ? JSON.stringify(next.promptV2) : null,
     id,
   );
   return next;

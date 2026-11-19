@@ -1,6 +1,6 @@
 import './env';
 import { openDb, migrate } from '@pivideo/runtime';
-import { listJobsByStatus, updateJob, getSegment, transitionSegmentStatus, getVideoProvider } from '@pivideo/runtime';
+import { listJobsByStatus, updateJob, getSegment, transitionSegmentStatus, getVideoProvider, extractLastFrame, isFirstFrameChainEnabled, runQC, isAutoQCEnabled, persistQCResult } from '@pivideo/runtime';
 import { composeVideo } from './composer';
 import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
@@ -83,17 +83,56 @@ async function pollOnce(): Promise<void> {
           resultPath: videoPath,
         });
         transitionSegmentStatus(db, job.segmentId, 'succeeded');
+        // 首帧链：抽取尾帧供下一块作首帧参考（失败仅告警，不阻断主流程）
+        if (isFirstFrameChainEnabled()) {
+          try {
+            await extractLastFrame(videoPath, job.segmentId);
+            console.log(`[worker] first-frame chain: extracted lastframe for segment ${job.segmentId}`);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(`[worker] first-frame chain: extract lastframe failed for segment ${job.segmentId}: ${message}`);
+          }
+        }
+        // 自动 QC 三级分流：approved/suspect/rejected，结果写入 job.qcResult
+        // 初期宽松策略：rejected 仅标注+告警，不自动回流重生成（人工决定）
+        if (isAutoQCEnabled()) {
+          try {
+            const report = await runQC(segment, videoPath);
+            persistQCResult(db, job.segmentId, report);
+            if (report.verdict === 'rejected') {
+              console.error(`[worker] qc: segment ${job.segmentId} REJECTED: ${report.issues.map((i) => i.message).join('; ')}`);
+            } else {
+              console.log(`[worker] qc: segment ${job.segmentId} verdict=${report.verdict} issues=${report.issues.length} humanReview=${report.needsHumanReview}`);
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(`[worker] qc failed for segment ${job.segmentId}: ${message}`);
+          }
+        }
         console.log(
           `[worker] segment ${job.segmentId} succeeded, video: ${videoPath}`,
         );
       } else if (result.status === 'failed') {
         const retryCount = job.retryCount + 1;
         if (retryCount < MAX_RETRY) {
+          const segment = getSegment(db, job.segmentId);
+          const prompt = segment?.prompt?.visual ?? '';
+          const qualitySuffix = segment?.prompt?.globalQualitySuffix ?? '';
+          const fullPrompt = qualitySuffix ? `${prompt} ${qualitySuffix}` : prompt;
+          if (!fullPrompt) {
+            updateJob(db, job.id, {
+              status: 'failed',
+              retryCount,
+              error: 'retry failed: segment prompt is empty',
+            });
+            transitionSegmentStatus(db, job.segmentId, 'failed');
+            continue;
+          }
           const submitResult = await provider.submit({
             segmentId: job.segmentId,
-            prompt: '',
+            prompt: fullPrompt,
             aspectRatio: '9:16',
-            estimatedSeconds: 5,
+            estimatedSeconds: segment?.estimatedSeconds ?? 5,
           });
           updateJob(db, job.id, {
             providerJobId: submitResult.providerJobId,

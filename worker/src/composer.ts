@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { cleanupTempFiles, pruneSegmentVersions } from '@pivideo/runtime';
 import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -10,7 +11,8 @@ import {
   STORAGE_DIR,
 } from '@pivideo/runtime';
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = (cmd: string, args: string[], options?: { maxBuffer?: number }) =>
+  promisify(execFile)(cmd, args, { maxBuffer: 10 * 1024 * 1024, ...options });
 
 interface ComposeResult {
   outputPath: string;
@@ -242,12 +244,21 @@ export async function composeVideo(
       currentPath = bgmPath2;
     }
 
-    // 5. 烧录字幕（如果存在）
+    // 5. 字幕交付（v1.1）：默认 SUBTITLE_BURN=off 交付 MP4+SRT（发布时按平台烧录）；
+    //    SUBTITLE_BURN=on 时烧录进画面（直接可发布）
     const srtPath = resolve(audioDir, 'subtitles.srt');
     if (existsSync(srtPath)) {
-      const subtitleStyle = process.env.SUBTITLE_STYLE ?? 'FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1';
-      const subtitledPath = resolve(outputDir, 'subtitled_tmp.mp4');
-      await burnSubtitles(currentPath, srtPath, subtitledPath, subtitleStyle);
+      const subtitleBurn = process.env.SUBTITLE_BURN ?? 'off';
+      if (subtitleBurn === 'on') {
+        const subtitleStyle = process.env.SUBTITLE_STYLE ?? 'FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1';
+        const subtitledPath = resolve(outputDir, 'subtitled_tmp.mp4');
+        await burnSubtitles(currentPath, srtPath, subtitledPath, subtitleStyle);
+        currentPath = subtitledPath;
+      } else {
+        // SRT 随片交付（与最终 MP4 同目录）
+        const fs = await import('node:fs/promises');
+        await fs.copyFile(srtPath, resolve(outputDir, 'subtitles.srt'));
+      }
     }
 
     // 6. 截取封面
@@ -269,6 +280,11 @@ export async function composeVideo(
       );
     }
 
+    // 合规存储（v1.1）：清理临时文件 + 版本保留（只留最终版+最近草稿）
+    cleanupTempFiles(outputDir);
+    for (const seg of succeeded) {
+      pruneSegmentVersions(db, seg.id);
+    }
     transitionProjectStatus(db, projectId, 'delivering');
     transitionProjectStatus(db, projectId, 'done');
 
