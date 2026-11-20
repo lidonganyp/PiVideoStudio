@@ -35,6 +35,7 @@ export {
   getJob,
   listJobsByProject,
   listJobsByStatus,
+  listJobsByHoldId,
   updateJob,
 } from './jobs';
 export type { CreateJobInput, UpdateJobFields, JobStatus } from './jobs';

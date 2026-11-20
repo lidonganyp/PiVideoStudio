@@ -155,7 +155,8 @@ export class MiniMaxProvider implements VideoProvider {
       model: this.model,
       content,
       resolution: this.resolution,
-      duration: Math.min(Math.max(job.estimatedSeconds, 5), this.capability.maxDuration),
+      // MiniMax API 仅接受整数时长（小数返回 400 invalid params 2013），四舍五入到最近整数秒
+      duration: Math.round(Math.min(Math.max(job.estimatedSeconds, 5), this.capability.maxDuration)),
       ratio: this.ratio,
       fast_mode: false,
     };
@@ -503,6 +504,89 @@ export function getProviderByName(name: string, model?: string): VideoProvider {
   }
 }
 
+// --- OpenAIImageProvider ---
+// 使用 OpenAI 兼容的 /images/generations 接口（如 aimagichub.xyz）
+// 同步调用：submit 时直接请求 API 并下载图片到本地，query 立即返回结果。
+export class OpenAIImageProvider implements ImageProvider {
+  name = 'openai-image';
+  private baseUrl: string;
+  private token: string;
+  private model: string;
+  private results = new Map<string, { status: 'pending' | 'running' | 'succeeded' | 'failed'; images?: ImageResult[]; error?: string }>();
+  private assetIds = new Map<string, string>();
+
+  constructor() {
+    this.baseUrl = process.env.OPENAI_IMAGE_BASE_URL ?? 'https://aimagichub.xyz/v1';
+    this.token = process.env.OPENAI_IMAGE_API_KEY ?? process.env.LLM_API_KEY ?? '';
+    this.model = process.env.OPENAI_IMAGE_MODEL ?? 'gpt-image-2';
+    if (!this.token) {
+      throw new Error('OPENAI_IMAGE_API_KEY 或 LLM_API_KEY 未设置，无法使用 OpenAIImageProvider');
+    }
+  }
+
+  async submit(job: ImageSubmitInput): Promise<{ providerJobId: string }> {
+    const url = `${this.baseUrl}/images/generations`;
+    const isPortrait = job.aspectRatio === '9:16';
+    const size = isPortrait ? '768x1344' : '1344x768';
+    const body = {
+      model: this.model,
+      prompt: job.prompt,
+      n: 1,
+      size,
+      response_format: 'url',
+    };
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`OpenAI image API error: HTTP ${resp.status} ${errText.slice(0, 300)}`);
+    }
+    const data = await resp.json() as { data?: Array<{ url?: string; b64_json?: string }> };
+    if (!data.data || data.data.length === 0 || !data.data[0].url) {
+      throw new Error('OpenAI image API 未返回图片 URL');
+    }
+    const imageUrl = data.data[0].url!;
+    const providerJobId = `openai-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.assetIds.set(providerJobId, job.assetId);
+    // 同步下载图片到本地
+    const assetId = job.assetId;
+    const imageDir = resolve(STORAGE_DIR, 'images', assetId);
+    mkdirSync(imageDir, { recursive: true });
+    const localPath = resolve(imageDir, 'candidate_1.jpg');
+    const imgResp = await fetch(imageUrl);
+    if (!imgResp.ok) {
+      this.results.set(providerJobId, { status: 'failed', error: `下载图片失败: HTTP ${imgResp.status}` });
+      return { providerJobId };
+    }
+    const buffer = Buffer.from(await imgResp.arrayBuffer());
+    writeFileSync(localPath, buffer);
+    console.log(`[openai-image-provider] submit assetId=${assetId} image saved`);
+    this.results.set(providerJobId, {
+      status: 'succeeded',
+      images: [{ imageUrl: `storage/images/${assetId}/candidate_1.jpg` }],
+    });
+    return { providerJobId };
+  }
+
+  async query(providerJobId: string): Promise<{
+    status: 'pending' | 'running' | 'succeeded' | 'failed';
+    images?: ImageResult[];
+    error?: string;
+  }> {
+    const result = this.results.get(providerJobId);
+    if (!result) {
+      return { status: 'failed', error: '未找到图片生成结果' };
+    }
+    return result;
+  }
+}
+
 let cachedImageProvider: ImageProvider | undefined;
 
 /**
@@ -521,9 +605,12 @@ export function getImageProvider(): ImageProvider {
     case 'minimax':
       cachedImageProvider = new MiniMaxImageProvider();
       break;
+    case 'openai':
+      cachedImageProvider = new OpenAIImageProvider();
+      break;
     default:
       throw new Error(
-        `未知的 IMAGE_PROVIDER: ${providerName}（当前支持: mock, minimax）`,
+        `未知的 IMAGE_PROVIDER: ${providerName}（当前支持: mock, minimax, openai）`,
       );
   }
 

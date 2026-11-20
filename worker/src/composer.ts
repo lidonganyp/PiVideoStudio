@@ -8,6 +8,8 @@ import {
   getProject,
   listSegmentsByProject,
   transitionProjectStatus,
+  updateProject,
+  canTransition,
   STORAGE_DIR,
 } from '@pivideo/runtime';
 
@@ -104,20 +106,22 @@ async function mixNarrationTrack(
   audioPath: string,
   outputPath: string,
 ): Promise<void> {
-  await execFileAsync('ffmpeg', [
-    '-y',
-    '-i', videoPath,
-    '-i', audioPath,
-    '-c:v', 'copy',
-    '-c:a', 'aac',
-    '-ar', '44100',
-    '-map', '0:v:0',
-    '-map', '1:a:0',
-    '-shortest',
+  // v1.1.2：保留视频原声（角色对白）为主轨，旁白混音叠加，不再丢弃原声
+  // （旧实现 -map 1:a:0 单选旁白轨，导致视频内对白全部丢失、无旁白段落静音）
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-i", videoPath,
+    "-i", audioPath,
+    "-filter_complex",
+    "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]",
+    "-map", "0:v:0",
+    "-map", "[aout]",
+    "-c:v", "copy",
+    "-c:a", "aac",
+    "-ar", "44100",
     outputPath,
   ]);
 }
-
 /**
  * 混入背景音乐（ducking：旁白播放时降低背景音乐音量）
  */
@@ -198,6 +202,12 @@ export async function composeVideo(
     throw new Error('没有可合成的分镜');
   }
 
+  // 状态机保护：如果当前 project status 无法直接转换到 composing（如被错误写入 segment status），
+  // 先修正为 reviewing（compose 的合法前置状态之一），再转换
+  if (!canTransition(project.status, 'composing')) {
+    console.warn(`[composer] project ${projectId} status='${project.status}' cannot transition to composing, correcting to 'reviewing' first`);
+    updateProject(db, projectId, { status: 'reviewing' });
+  }
   transitionProjectStatus(db, projectId, 'composing');
 
   try {

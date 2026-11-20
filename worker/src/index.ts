@@ -1,6 +1,6 @@
 import './env';
 import { openDb, migrate } from '@pivideo/runtime';
-import { listJobsByStatus, updateJob, getSegment, transitionSegmentStatus, getVideoProvider, extractLastFrame, isFirstFrameChainEnabled, runQC, isAutoQCEnabled, persistQCResult } from '@pivideo/runtime';
+import { listJobsByStatus, listJobsByHoldId, updateJob, getSegment, transitionSegmentStatus, getVideoProvider, extractLastFrame, isFirstFrameChainEnabled, runQC, isAutoQCEnabled, persistQCResult, billingConfigFromEnv, settleCall as billingSettleCall, finalizeHold as billingFinalizeHold, secondsToTokens, BILLING_MODEL_VIDEO } from '@pivideo/runtime';
 import { composeVideo } from './composer';
 import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
@@ -15,6 +15,44 @@ const STORAGE_DIR = resolve(
 
 const db = openDb();
 migrate(db);
+
+// B7 融合：计费客户端（PINOVEL_API_URL + INTERNAL_API_SECRET 配置后启用）
+const billingCfg = billingConfigFromEnv();
+
+/** job 成功结算：按 estimatedSeconds 计费（jobId+callId 幂等，重试不重复扣费）。 */
+async function settleJobSuccess(job: { id: string; billingHoldId?: string }, seconds: number): Promise<void> {
+  if (!billingCfg || !job.billingHoldId) return;
+  try {
+    await billingSettleCall(billingCfg, {
+      jobId: job.billingHoldId,
+      callId: job.id,
+      internalStage: 'video_generation',
+      model: BILLING_MODEL_VIDEO,
+      tokensIn: secondsToTokens(seconds),
+      tokensOut: 0,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[billing] settle job ${job.id} failed: ${message}`);
+  }
+}
+
+/** job 终态后检查计费批次：全部终态则 finalize（有成功→success，全失败→failure）。 */
+async function maybeFinalizeHold(job: { id: string; billingHoldId?: string }): Promise<void> {
+  if (!billingCfg || !job.billingHoldId) return;
+  try {
+    const batchJobs = listJobsByHoldId(db, job.billingHoldId);
+    if (batchJobs.length === 0) return;
+    const allTerminal = batchJobs.every((j) => j.status === 'succeeded' || j.status === 'failed');
+    if (!allTerminal) return;
+    const anySuccess = batchJobs.some((j) => j.status === 'succeeded');
+    await billingFinalizeHold(billingCfg, job.billingHoldId, anySuccess ? 'success' : 'failure');
+    console.log(`[billing] hold ${job.billingHoldId} finalized (${anySuccess ? 'success' : 'failure'}), jobs=${batchJobs.length}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[billing] finalize hold ${job.billingHoldId} failed: ${message}`);
+  }
+}
 
 async function downloadVideo(url: string, destPath: string): Promise<void> {
   const resp = await fetch(url);
@@ -83,6 +121,9 @@ async function pollOnce(): Promise<void> {
           resultPath: videoPath,
         });
         transitionSegmentStatus(db, job.segmentId, 'succeeded');
+        // B7 融合：成功结算 + 批次收尾检查
+        await settleJobSuccess(job, segment.estimatedSeconds);
+        await maybeFinalizeHold(job);
         // 首帧链：抽取尾帧供下一块作首帧参考（失败仅告警，不阻断主流程）
         if (isFirstFrameChainEnabled()) {
           try {
@@ -150,6 +191,8 @@ async function pollOnce(): Promise<void> {
             error: result.error ?? 'max retries exceeded',
           });
           transitionSegmentStatus(db, job.segmentId, 'failed');
+          // B7 融合：终态后检查批次收尾
+          await maybeFinalizeHold(job);
           console.log(
             `[worker] segment ${job.segmentId} failed after ${retryCount} retries`,
           );

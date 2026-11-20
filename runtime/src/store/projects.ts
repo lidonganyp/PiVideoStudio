@@ -6,6 +6,7 @@ import { canTransition } from '../state-machine';
 interface ProjectRow {
   id: string;
   title: string;
+  owner_user_id: number | null;
   novel_source: string;
   style: string;
   aspect_ratio: string;
@@ -18,6 +19,7 @@ function rowToProject(row: ProjectRow): VideoProject {
   return {
     id: row.id,
     title: row.title,
+    ownerUserId: row.owner_user_id ?? undefined,
     novelSource: JSON.parse(row.novel_source) as VideoProject['novelSource'],
     style: row.style as StyleTemplate,
     aspectRatio: row.aspect_ratio as AspectRatio,
@@ -32,6 +34,8 @@ export interface CreateProjectInput {
   novelSource: VideoProject['novelSource'];
   style: StyleTemplate;
   aspectRatio: AspectRatio;
+  /** 项目归属（PiNovelStudio 用户 ID，B7 融合） */
+  ownerUserId?: number;
 }
 
 export function createProject(db: DatabaseSync, input: CreateProjectInput): VideoProject {
@@ -39,6 +43,7 @@ export function createProject(db: DatabaseSync, input: CreateProjectInput): Vide
   const project: VideoProject = {
     id: randomUUID(),
     title: input.title,
+    ownerUserId: input.ownerUserId,
     novelSource: input.novelSource,
     style: input.style,
     aspectRatio: input.aspectRatio,
@@ -48,11 +53,12 @@ export function createProject(db: DatabaseSync, input: CreateProjectInput): Vide
   };
   db.prepare(
     `INSERT INTO video_projects
-       (id, title, novel_source, style, aspect_ratio, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, title, owner_user_id, novel_source, style, aspect_ratio, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     project.id,
     project.title,
+    project.ownerUserId ?? null,
     JSON.stringify(project.novelSource),
     project.style,
     project.aspectRatio,
@@ -70,10 +76,17 @@ export function getProject(db: DatabaseSync, id: string): VideoProject | undefin
   return row ? rowToProject(row) : undefined;
 }
 
-export function listProjects(db: DatabaseSync): VideoProject[] {
-  const rows = db
-    .prepare('SELECT * FROM video_projects ORDER BY created_at DESC')
-    .all() as unknown as ProjectRow[];
+export function listProjects(db: DatabaseSync, ownerUserId?: number): VideoProject[] {
+  const rows =
+    ownerUserId === undefined
+      ? (db
+          .prepare('SELECT * FROM video_projects ORDER BY created_at DESC')
+          .all() as unknown as ProjectRow[])
+      : (db
+          .prepare(
+            'SELECT * FROM video_projects WHERE owner_user_id = ? ORDER BY created_at DESC',
+          )
+          .all(ownerUserId) as unknown as ProjectRow[]);
   return rows.map(rowToProject);
 }
 

@@ -80,13 +80,18 @@ function generateSRT(
 ): void {
   let srt = '';
   let currentTime = 0;
+  let index = 0;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     const startTime = currentTime;
     const endTime = currentTime + seg.duration;
-    srt += `${i + 1}\n`;
-    srt += `${formatSRTTime(startTime)} --> ${formatSRTTime(endTime)}\n`;
-    srt += `${seg.narration}\n\n`;
+    // v1.1：无旁白分镜（静音占位）不输出字幕条目，但时间轴继续累计
+    if (seg.narration) {
+      index += 1;
+      srt += `${index}\n`;
+      srt += `${formatSRTTime(startTime)} --> ${formatSRTTime(endTime)}\n`;
+      srt += `${seg.narration}\n\n`;
+    }
     currentTime = endTime;
   }
   writeFileSync(outputPath, srt, 'utf-8');
@@ -190,7 +195,9 @@ export async function generateTTS(
     const audioPaths: string[] = [];
 
     for (const seg of segments) {
-      const narration = seg.prompt?.narration ?? seg.sourceText;
+      // v1.1：performance 纯表演镜头可能无旁白（narration 为空串），
+      // 空文本送入 TTS 会产出 0 字节音频导致 ffprobe 失败，需静音占位
+      const narration = (seg.prompt?.narration ?? '').trim();
       const audioPath = resolve(audioDir, `${seg.id}_v${seg.currentVersion}.mp3`);
       // 主角音色：按块内出场角色查 Voice Registry，未注册回退默认音色
       let segVoice = ttsVoice;
@@ -201,7 +208,21 @@ export async function generateTTS(
         }
       }
       if (!existsSync(audioPath)) {
-        await generateAudio(narration, audioPath, segVoice);
+        if (narration) {
+          await generateAudio(narration, audioPath, segVoice);
+        } else {
+          // 无旁白分镜：生成静音占位（时长取分镜估算秒数），保持整片时间轴完整
+          const silentSecs = Math.max(1, seg.estimatedSeconds || 1);
+          await execFileAsync('ffmpeg', [
+            '-y',
+            '-f', 'lavfi',
+            '-i', 'anullsrc=r=24000:cl=mono',
+            '-t', String(silentSecs),
+            '-acodec', 'libmp3lame',
+            '-q:a', '5',
+            audioPath,
+          ]);
+        }
       }
       const duration = await getAudioDuration(audioPath);
       segmentDurations.push({ narration, duration });

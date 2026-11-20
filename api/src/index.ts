@@ -57,12 +57,20 @@ import {
   getRouteTable,
   routeShot,
   STORAGE_DIR,
+  billingConfigFromEnv,
+  createHold as billingCreateHold,
+  finalizeHold as billingFinalizeHold,
+  estimateHoldFen,
   type CreateProjectInput,
 } from '@pivideo/runtime';
 import type { AspectRatio, StyleTemplate, VideoJob } from '@pivideo/runtime';
+import { jwtAuth } from './auth';
+import type { Request, Response, NextFunction } from 'express';
 
 const app = express();
 app.use(express.json());
+// JWT 认证（B7 融合）：JWT_SECRET 配置后强制登录，与 PiNovelStudio 共享登录态
+app.use(jwtAuth);
 
 // 持久化层：SQLite（node:sqlite），启动时自动建表
 const db = openDb();
@@ -123,8 +131,9 @@ app.put('/api/series/:id', (req, res) => {
   res.json({ ok: true, series });
 });
 
-app.get('/api/projects', (_req, res) => {
-  res.json(listProjects(db));
+app.get('/api/projects', (req, res) => {
+  // JWT 启用时按登录用户过滤项目列表；开发模式返回全部
+  res.json(listProjects(db, req.user?.sub));
 });
 
 app.post('/api/projects', (req, res) => {
@@ -142,9 +151,33 @@ app.post('/api/projects', (req, res) => {
     },
     style: (style ?? 'narration') as StyleTemplate,
     aspectRatio: (aspectRatio ?? '9:16') as AspectRatio,
+    ownerUserId: req.user?.sub,
   };
   const project = createProject(db, input);
   res.status(201).json(project);
+});
+
+// 项目所有权中间件（B7 融合）：JWT 启用时校验 /api/projects/:id* 的归属。
+// 旧项目（owner_user_id 为 NULL）过渡期放行；admin 可访问全部。
+app.use('/api/projects/:id', (req: Request, res: Response, next: NextFunction) => {
+  if (!req.user) {
+    next(); // 开发模式（JWT 未配置）
+    return;
+  }
+  const project = getProject(db, req.params.id);
+  if (!project) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  if (
+    project.ownerUserId === undefined ||
+    project.ownerUserId === req.user.sub ||
+    req.user.role === 'admin'
+  ) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: 'forbidden: 无权访问该项目' });
 });
 
 app.get('/api/projects/:id', (req, res) => {
@@ -576,6 +609,31 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
       return;
     }
     const concurrency = Number(process.env.GENERATE_CONCURRENCY ?? 3);
+
+    // B7 融合：计费预占（余额不足拒绝生成，402）
+    const billingCfg = billingConfigFromEnv();
+    let billingHoldId: string | undefined;
+    if (billingCfg && project.ownerUserId !== undefined) {
+      const totalSeconds = ready.reduce((sum, s) => sum + s.estimatedSeconds, 0);
+      const amountFen = estimateHoldFen({
+        totalSeconds,
+        imageCalls: 0,
+        ttsCalls: ready.length,
+      });
+      try {
+        const hold = await billingCreateHold(billingCfg, {
+          userId: project.ownerUserId,
+          jobId: `pivideo-gen-${projectId}-${Date.now()}`,
+          amountFen,
+        });
+        billingHoldId = hold.jobId;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(402).json({ error: `计费预占失败（余额不足或服务异常）: ${message}` });
+        return;
+      }
+    }
+
     transitionProjectStatus(db, projectId, 'segment_generating');
     const jobs: VideoJob[] = [];
     const errors: Array<{ segmentId: string; error: string }> = [];
@@ -592,6 +650,7 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
             segmentId: seg.id,
             kind: 't2v',
             provider: route.provider,
+            billingHoldId,
           });
           try {
             const prompt = seg.prompt?.visual ?? '';
@@ -601,9 +660,14 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
             const charAssets = listAssetsByProject(db, projectId, 'character');
             let referenceImagePath: string | undefined;
             if (seg.characterNames.length > 0) {
-              const matched = charAssets.find((a) =>
-                seg.characterNames.includes(a.name),
-              );
+              // v1.1.2：焦点角色锚定——取原文出现次数最多的角色作为参考图
+              // （旧实现取 characterNames[0]，多角色同场时锚定对象随分镜漂移）
+              const focusChar = [...seg.characterNames]
+                .map((name) => ({ name, count: seg.sourceText.split(name).length - 1 }))
+                .sort((a, b) => b.count - a.count)[0];
+              const matched = focusChar
+                ? charAssets.find((a) => a.name === focusChar.name)
+                : undefined;
               referenceImagePath = matched?.referenceImagePath;
             }
             if (referenceImagePath === undefined) {
@@ -641,13 +705,19 @@ app.post('/api/projects/:id/generate-segments', async (req, res) => {
       jobs.push(...results.filter((j): j is VideoJob => j !== null));
     }
     if (jobs.length === 0) {
+      // 全部提交失败：立即释放计费预占
+      if (billingCfg && billingHoldId) {
+        billingFinalizeHold(billingCfg, billingHoldId, 'failure').catch((err) => {
+          console.error(`[billing] release hold ${billingHoldId} failed:`, err);
+        });
+      }
       res.status(502).json({
         error: `全部分镜提交失败: ${errors[0]?.error ?? 'unknown'}`,
         errors,
       });
       return;
     }
-    res.json({ ok: true, jobs, errors });
+    res.json({ ok: true, jobs, errors, billingHoldId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
@@ -771,6 +841,11 @@ app.get('/files/*', (req, res) => {
     res.status(500).json({ error: 'read error' });
   });
   stream.pipe(res);
+});
+
+// 健康检查端点
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
 });
 
 app.listen(port, () => {

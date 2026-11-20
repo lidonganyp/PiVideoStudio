@@ -1,8 +1,22 @@
-const BASE = '';
+const BASE = '/video';
+
+/** B7 融合：与 PiNovelStudio 同域共享登录态（localStorage['platform_token']）。 */
+function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem('platform_token');
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getAuthToken();
   const resp = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: resp.statusText }));

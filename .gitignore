@@ -7,3 +7,7 @@ coverage/
 .DS_Store
 uploads/
 storage/
+
+# 临时测试文件
+runtime/tts_test.js
+runtime/tts_test.mjs

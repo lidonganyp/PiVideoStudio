@@ -206,7 +206,7 @@ const sampleVideoUrl = computed(() => {
   const job = jobs.value.find(
     (j) => j.segmentId === sampleSegmentId.value && j.status === 'succeeded' && j.resultPath,
   );
-  return job ? job.resultPath!.replace(/^.*storage\//, '/files/') : '';
+  return job ? job.resultPath!.replace(/^.*storage\//, '/video/files/') : '';
 });
 
 /** 样片待确认：样片已成功且其余分镜尚未批量提交 */
@@ -416,7 +416,7 @@ onUnmounted(stopPolling);
             <p class="asset-desc">{{ asset.description }}</p>
             <div v-if="asset.referenceImagePath" class="candidate-grid">
               <img
-                :src="asset.referenceImagePath.replace(/^.*storage\//, '/files/')"
+                :src="asset.referenceImagePath.replace(/^.*storage\//, '/video/files/')"
                 :alt="asset.name"
                 class="asset-img selected"
               />
@@ -434,7 +434,7 @@ onUnmounted(stopPolling);
                 <img
                   v-for="(img, i) in asset.candidateImages"
                   :key="img"
-                  :src="img.replace(/^.*storage\//, '/files/')"
+                  :src="img.replace(/^.*storage\//, '/video/files/')"
                   :alt="`${asset.name} 候选 ${i + 1}`"
                   class="asset-img candidate"
                   @click="selectImageFor(asset.id, img)"

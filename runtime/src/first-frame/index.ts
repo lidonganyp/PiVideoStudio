@@ -80,8 +80,12 @@ export function getFirstFrameRef(
   const segments = listSegmentsByProject(db, segment.projectId);
   const prev = segments.find((s) => s.order === segment.order - 1);
   if (!prev) return undefined;
-  if ((prev.sceneSummary ?? '') !== (segment.sceneSummary ?? '')) {
-    return undefined; // 场景切换断链
+  // v1.1.2：断链判据从 sceneSummary 全等改为角色重叠（sceneSummary 是事件描述，
+  // 同场景各块必然不同，旧判据导致同场景首帧链全断）；无共同角色视为场景切换
+  const prevChars = new Set(prev.characterNames ?? []);
+  const hasShared = (segment.characterNames ?? []).some((c) => prevChars.has(c));
+  if (!hasShared) {
+    return undefined; // 场景切换断链（无共同出场角色）
   }
   const framePath = lastFramePath(prev.id);
   return existsSync(framePath) ? framePath : undefined;

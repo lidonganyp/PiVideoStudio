@@ -96,6 +96,8 @@ export interface Screenplay {
 export interface VideoProject {
   id: string;
   title: string;
+  /** 项目归属（PiNovelStudio 用户 ID，B7 融合）；本地创建时为空 */
+  ownerUserId?: number;
   novelSource: {
     projectId?: string;
     chapterIds: string[];
@@ -250,6 +252,8 @@ export interface VideoJob {
   id: string;
   projectId: string;
   segmentId?: string;
+  /** 计费批次（B7 融合）：PiNovelStudio hold 的 jobId */
+  billingHoldId?: string;
   kind: JobKind;
   provider: string;
   providerJobId?: string;

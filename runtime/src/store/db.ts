@@ -190,4 +190,18 @@ export function migrate(db: DatabaseSync): void {
   if (!jobExisting.has('provider_model')) {
     db.exec('ALTER TABLE video_jobs ADD COLUMN provider_model TEXT');
   }
+
+  // 幂等列迁移：B7 融合——项目归属（PiNovelStudio 用户 ID）与计费批次（hold jobId）
+  const b7ProjectColumns = db
+    .prepare("PRAGMA table_info(video_projects)")
+    .all() as Array<{ name: string }>;
+  if (!(b7ProjectColumns.map((c) => c.name)).includes('owner_user_id')) {
+    db.exec('ALTER TABLE video_projects ADD COLUMN owner_user_id INTEGER');
+  }
+  const b7JobColumns = db
+    .prepare("PRAGMA table_info(video_jobs)")
+    .all() as Array<{ name: string }>;
+  if (!(b7JobColumns.map((c) => c.name)).includes('billing_hold_id')) {
+    db.exec('ALTER TABLE video_jobs ADD COLUMN billing_hold_id TEXT');
+  }
 }

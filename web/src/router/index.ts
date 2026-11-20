@@ -1,7 +1,10 @@
-import { createRouter, createWebHistory } from 'vue-router';
+import { createRouter, createMemoryHistory, createWebHistory } from 'vue-router';
+import { qiankunWindow } from 'vite-plugin-qiankun/es/helper';
 
+const isQiankun = !!qiankunWindow.__POWERED_BY_QIANKUN__;
 const router = createRouter({
-  history: createWebHistory(),
+  // qiankun 模式用内存路由：子应用内部导航不抢占主应用 URL
+  history: isQiankun ? createMemoryHistory() : createWebHistory('/video/'),
   routes: [
     {
       path: '/',

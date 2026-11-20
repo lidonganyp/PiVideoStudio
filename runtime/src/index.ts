@@ -2,6 +2,8 @@ export * from './types';
 export * from './storage';
 export * from './state-machine';
 export * from './store';
+// 显式重导出，避免 tsx ESM 模式下 export * 链解析时序问题
+export { listJobsByHoldId } from './store/jobs';
 export * from './llm';
 export * from './story-analyzer';
 export * from './screenplay';
@@ -16,4 +18,5 @@ export * from './asset-extractor';
 export * from './tts';
 export * from './queue';
 export * from './billing';
+export * from './billing-client';
 export * from './integration';

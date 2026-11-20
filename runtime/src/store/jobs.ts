@@ -8,6 +8,7 @@ interface JobRow {
   id: string;
   project_id: string;
   segment_id: string | null;
+  billing_hold_id: string | null;
   kind: string;
   provider: string;
   provider_job_id: string | null;
@@ -27,6 +28,7 @@ function rowToJob(row: JobRow): VideoJob {
     id: row.id,
     projectId: row.project_id,
     segmentId: row.segment_id ?? undefined,
+    billingHoldId: row.billing_hold_id ?? undefined,
     kind: row.kind as JobKind,
     provider: row.provider,
     providerJobId: row.provider_job_id ?? undefined,
@@ -50,6 +52,8 @@ export interface CreateJobInput {
   providerJobId?: string;
   /** 队列优先级：2=人工确认 regenerate / 1=失败重试 / 0=批量生成（默认） */
   priority?: number;
+  /** 计费批次（B7 融合）：PiNovelStudio hold 的 jobId */
+  billingHoldId?: string;
 }
 
 export function createJob(db: DatabaseSync, input: CreateJobInput): VideoJob {
@@ -58,6 +62,7 @@ export function createJob(db: DatabaseSync, input: CreateJobInput): VideoJob {
     id: randomUUID(),
     projectId: input.projectId,
     segmentId: input.segmentId,
+    billingHoldId: input.billingHoldId,
     kind: input.kind,
     provider: input.provider,
     providerJobId: input.providerJobId,
@@ -69,13 +74,14 @@ export function createJob(db: DatabaseSync, input: CreateJobInput): VideoJob {
   };
   db.prepare(
     `INSERT INTO video_jobs
-       (id, project_id, segment_id, kind, provider, provider_job_id,
+       (id, project_id, segment_id, billing_hold_id, kind, provider, provider_job_id,
         status, retry_count, priority, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     job.id,
     job.projectId,
     job.segmentId ?? null,
+    job.billingHoldId ?? null,
     job.kind,
     job.provider,
     job.providerJobId ?? null,
@@ -106,6 +112,14 @@ export function listJobsByStatus(db: DatabaseSync, status: JobStatus): VideoJob[
   const rows = db
     .prepare('SELECT * FROM video_jobs WHERE status = ? ORDER BY created_at ASC')
     .all(status) as unknown as JobRow[];
+  return rows.map(rowToJob);
+}
+
+/** 按计费批次查询（B7 融合）：worker 判断批次内 job 是否全部终态。 */
+export function listJobsByHoldId(db: DatabaseSync, billingHoldId: string): VideoJob[] {
+  const rows = db
+    .prepare('SELECT * FROM video_jobs WHERE billing_hold_id = ? ORDER BY created_at ASC')
+    .all(billingHoldId) as unknown as JobRow[];
   return rows.map(rowToJob);
 }
 

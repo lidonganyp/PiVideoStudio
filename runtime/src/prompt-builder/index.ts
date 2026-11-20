@@ -112,7 +112,7 @@ modules（全部英文，供视频模型直接使用）：
 - audio: 声音（对白必须保留原文语言（中文）一字不译，情感指示与 [breath] 标记用英文；环境音分层、音效、是否 NO MUSIC）
 - style: 风格（胶片质感 + 调色 + 画质法则）
 negative: 负面清单（英文，以给定负面清单为基础可追加）
-narration: 中文旁白（基于原文精简，按 4~5 字/秒 × 块时长控制字数）
+narration: 中文旁白（基于原文精简，按 4~5 字/秒 × 块时长控制字数；对白密集块只写极简转场衔接句或留空，台词交给画面内角色原声，避免第三方解说感）
 subtitle: 中文字幕（与旁白一致或精简）
 cameraZh: 中文镜头语言描述（如『中近景，缓慢推进，强调人物表情』）
 lipSync: 口型模式（speak=说话有口型/inner=内心独白嘴唇闭合/none=无台词）
@@ -283,15 +283,38 @@ ${sceneBlock}
       .map((c) => '@' + c.name + ': ' + c.description + '. 100% matches the reference, fully consistent in every shot.')
       .join(String.fromCharCode(10));
   }
-  // audio 兜底（v1.1.1）：LLM 漏填时从原文提取中文对白注入，保证对白语言正确
-  if (modules.audio.length === 0) {
-    const dialogues = Array.from(segment.sourceText.matchAll(/[“「"]([^”」"]{2,})[”」"]/g))
-      .map((m) => m[1].trim())
-      .filter((t) => /[一-龥]/.test(t));
-    const dialoguePart = dialogues.length
-      ? ' Dialogue (keep original Chinese, do not translate): ' + dialogues.map((d) => ' + d + ').join(' ')
-      : '';
-    modules.audio = 'NO MUSIC. Layered environment sound consistent with the scene.' + dialoguePart;
+  // audio 对白强制校验（v1.1.2）：原文含中文对白而 audio 模块缺失时强制注入，
+  // 修复 performance/dialogue 镜头 LLM 漏带台词导致视频无对白的问题（SEG1/SEG2 台词丢失根因）
+  const dialogueTexts: string[] = [];
+  const dialogueLines: string[] = [];
+  for (const m of segment.sourceText.matchAll(
+    /([一-龥]{1,6})[（(][^）)]{0,8}[）)][:：]\s*[“「"]?([^”」"\n]{2,})[”」"]?/g,
+  )) {
+    const text = m[2].trim();
+    dialogueTexts.push(text);
+    dialogueLines.push(`${m[1]}: 「${text}」`);
+  }
+  if (dialogueLines.length === 0) {
+    for (const m of segment.sourceText.matchAll(/[“「"]([^”」"]{2,})[”」"]/g)) {
+      const t = m[1].trim();
+      if (/[一-龥]/.test(t)) {
+        dialogueTexts.push(t);
+        dialogueLines.push(`「${t}」`);
+      }
+    }
+  }
+  if (dialogueTexts.length > 0) {
+    const dialoguePart =
+      ' Dialogue (keep original Chinese, do not translate): ' + dialogueLines.join(' ');
+    if (modules.audio.length === 0) {
+      modules.audio =
+        'NO MUSIC. Layered environment sound consistent with the scene.' + dialoguePart;
+    } else if (!dialogueTexts.some((t) => modules.audio.includes(t))) {
+      // audio 模块非空但未包含原文对白：追加注入，保证台词不丢失
+      modules.audio = modules.audio + dialoguePart;
+    }
+  } else if (modules.audio.length === 0) {
+    modules.audio = 'NO MUSIC. Layered environment sound consistent with the scene.';
   }
   const negative = (result.negative || template.negative).trim();
   const finalPrompt = assembleFinalPrompt(modules, negative);
